@@ -1,0 +1,29 @@
+{
+  "_comment": "Default bch-bot configuration. The treasury address below receives the 0.5% per-tx fee when configured. Change it to your own address if you fork the wallet. Set treasuryBps to 0 to disable the fee entirely.",
+
+  "treasuryAddress": "",
+  "treasuryBps": 50,
+
+  "treasuryMinSats": 10,
+  "_treasuryMinSats_comment": "Skip the fee output entirely if computed fee < this many sats (avoids dust outputs)",
+
+  "treasuryRoundingRule": "floor",
+  "_treasuryRoundingRule_comment": "How to round fractional sat amounts: 'floor' (undercharge user) or 'ceil' (overcharge). Floor is user-friendly and is what most exchanges do.",
+
+  "rostrum": {
+    "mainnet": "cashnode.bch.ninja:50004",
+    "chipnet": "chipnet.bch.ninja:50004",
+    "alt": "bch.loping.net:50004"
+  },
+  "cauldronRostrum": {
+    "mainnet": "rostrum.cauldron.quest:50004"
+  },
+
+  "walletDir": "$HOME/.bch-wallet",
+  "network": "mainnet",
+
+  "broadcast": {
+    "requireConfirmFlag": true,
+    "allowUnconfirmed": false
+  }
+}

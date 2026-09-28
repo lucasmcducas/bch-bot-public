@@ -1,0 +1,57 @@
+{
+  "name": "bch-bot",
+  "version": "0.4.0",
+  "description": "BCH wallet bot — Node.js + libauth + public Rostrum/Electrum. Self-custodial BCH + CashTokens wallet with optional 0.5% per-tx treasury fee for Omarchy distribution.",
+  "type": "module",
+  "main": "lib/wallet.mjs",
+  "bin": {
+    "bch-bot": "bin/bch-bot"
+  },
+  "scripts": {
+    "wallet:create": "node scripts/create-wallet.mjs",
+    "wallet:encrypt": "node scripts/encrypt-wallet.mjs",
+    "address": "node scripts/address.mjs",
+    "balance": "node scripts/balance.mjs",
+    "utxos": "node scripts/utxos.mjs",
+    "send": "node scripts/send.mjs",
+    "send-token": "node scripts/send-token.mjs",
+    "swap": "node scripts/swap.mjs",
+    "stake": "node scripts/stake.mjs",
+    "add-liquidity": "node scripts/add-liquidity.mjs",
+    "sweep": "node scripts/sweep.mjs",
+    "history": "node scripts/history.mjs",
+    "test": "node scripts/test-tokens.mjs && node scripts/test-strategies.mjs && node scripts/test-pusd.mjs && node scripts/test-cauldron.mjs && node scripts/test-fee.mjs && node scripts/test-wallet-encryption.mjs"
+  },
+  "keywords": [
+    "bitcoin-cash",
+    "bch",
+    "wallet",
+    "libauth",
+    "electrum",
+    "cash-tokens",
+    "cauldron",
+    "omarchy",
+    "self-custodial"
+  ],
+  "author": "Jav (Hermes agent for Luke)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lucasmcducas/bch-bot.git",
+    "branch": "bch-bot/phase-1"
+  },
+  "bugs": {
+    "url": "https://github.com/lucasmcducas/bch-bot/issues"
+  },
+  "homepage": "https://github.com/lucasmcducas/bch-bot#readme",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@bitauth/libauth": "3.0.0",
+    "@cashlab/cauldron": "1.0.3",
+    "@cashlab/common": "1.0.5",
+    "@electrum-cash/network": "4.3.0",
+    "@electrum-cash/web-socket": "4.0.3"
+  }
+}

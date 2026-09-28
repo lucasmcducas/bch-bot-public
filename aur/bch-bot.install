@@ -1,0 +1,24 @@
+# bch-bot .install script
+# Runs at install/upgrade/removal time.
+
+post_install() {
+  echo "==> bch-bot installed."
+  echo "    Run 'bch-bot create-wallet' to generate a new wallet."
+  echo "    Set BCH_WALLET_DIR to choose where the wallet is stored (default: ~/.bch-wallet)."
+  echo "    Edit ~/.config/bch-bot/config.json (copied from /etc/skel/.config/bch-bot/config.json)"
+  echo "    to configure the treasury fee address."
+}
+
+post_upgrade() {
+  post_install
+}
+
+pre_remove() {
+  echo "==> bch-bot is being removed."
+  echo "    Your wallet at ~/.bch-wallet (or wherever BCH_WALLET_DIR points) is NOT removed."
+  echo "    Back it up manually if you want to keep it."
+}
+
+post_remove() {
+  echo "==> bch-bot removed. Wallet files (if any) remain in place."
+}

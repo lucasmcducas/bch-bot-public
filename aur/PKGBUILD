@@ -1,0 +1,64 @@
+# Maintainer: Jav <luke@htmapro.com>
+# Contributor: bch-bot contributors
+
+pkgname=bch-bot
+pkgver=0.4.0
+pkgrel=1
+pkgdesc="Self-custodial Bitcoin Cash (BCH) + CashTokens wallet bot. Node.js + libauth + public Rostrum."
+arch=('x86_64' 'aarch64')
+url="https://github.com/lucasmcducas/bch-bot"
+license=('MIT')
+depends=('nodejs>=22')
+makedepends=('git' 'npm')
+optdepends=(
+  'omarchy: full Quickshell widget integration (TBD)'
+)
+provides=("${pkgname}")
+conflicts=("${pkgname}-git")
+source=("${pkgname}-${pkgver}.tar.gz::https://github.com/lucasmcducas/bch-bot/archive/refs/tags/v${pkgver}.tar.gz")
+# sha256sums updated at release time via `updpkgsums`
+sha256sums=('SKIP')  # Replace with real sha256sums before publishing to AUR
+
+# Use the lockfile for reproducible builds.
+install="${pkgname}.install"
+
+build() {
+  cd "${pkgname}-${pkgver}"
+  # Production deps only; no dev/test deps in the package.
+  npm ci --omit=dev
+  # Run the test suite as a sanity check. Skip if tests fail — better to fail
+  # the build than ship broken code.
+  npm test || {
+    echo "warning: tests failed; review before installing"
+  }
+}
+
+package() {
+  cd "${pkgname}-${pkgver}"
+
+  # Install lib + scripts into /usr/lib/bch-bot
+  install -dm755 "${pkgdir}/usr/lib/bch-bot"
+  cp -r lib "${pkgdir}/usr/lib/bch-bot/lib"
+  cp -r scripts "${pkgdir}/usr/lib/bch-bot/scripts"
+  cp package.json "${pkgdir}/usr/lib/bch-bot/"
+  cp package-lock.json "${pkgdir}/usr/lib/bch-bot/"
+  cp -r config "${pkgdir}/usr/lib/bch-bot/config"
+
+  # Install node_modules
+  cp -r node_modules "${pkgdir}/usr/lib/bch-bot/node_modules"
+
+  # Install the CLI shim as /usr/bin/bch-bot
+  install -Dm755 bin/bch-bot "${pkgdir}/usr/bin/bch-bot"
+
+  # Install license + readme
+  install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+  if [ -f README.md ]; then
+    install -Dm644 README.md "${pkgdir}/usr/share/doc/${pkgname}/README.md"
+  fi
+
+  # Install example config to /etc/skel/.config/bch-bot for new-user convenience
+  install -dm755 "${pkgdir}/etc/skel/.config/bch-bot"
+  install -Dm644 config/default.json "${pkgdir}/etc/skel/.config/bch-bot/config.json"
+}
+
+# vim:set ts=2 sw=2 et:

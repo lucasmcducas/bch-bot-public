@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Build / lockfile (regenerate via `npm install`)
+package-lock.json
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
+
+# Env / local config (bot reads BCH_WALLET_DIR; never commit wallet data)
+.env
+.env.local
+*.local
+
+# Wallet data lives outside this repo at $BCH_WALLET_DIR (~/.bch-wallet by default).
+# Defense in depth — if a user accidentally points BCH_WALLET_DIR at the repo:
+wallet.json
+state.json
