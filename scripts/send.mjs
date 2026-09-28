@@ -11,7 +11,6 @@ import { connect, scripthashForAddress } from '../lib/network.mjs';
 import { loadWallet, loadHdNode, deriveReceivingAddresses, newChangeAddress, deriveChangeAddresses } from '../lib/wallet.mjs';
 import { signP2pkhTransaction } from '../lib/sign.mjs';
 import { binToHex } from '../lib/hex.mjs';
-import { computeTreasuryFee, withTreasuryFee, formatFeeLine } from '../lib/fee.mjs';
 
 const FEE_RATE_SATS_PER_BYTE = 1.0; // conservative; mainnet often 1.0–2.0
 const DUST_THRESHOLD = 546n;
@@ -56,8 +55,6 @@ async function main() {
   if (args.length < 2 || args.includes('--help') || args.includes('-h')) {
     console.log(`Usage: send.mjs <recipient_address> <sats>`);
     console.log(`Set BCH_CONFIRM=yes to actually broadcast (dry-run otherwise).`);
-    console.log();
-    console.log(`Treasury fee: 0.5% of transfer amount (set BCH_TREASURY_BPS=0 to disable)`);
     process.exit(args.length < 2 ? 1 : 0);
   }
   const [recipient, satsArg] = args;
@@ -75,19 +72,12 @@ async function main() {
     console.error(`selected ${selected.length} UTXO(s), total ${total} sats`);
 
     // 2. Build outputs (recipient + change)
-    // Compute treasury fee FIRST so we can size the tx and change correctly.
-    const treasuryFee = computeTreasuryFee(targetSats);
-    console.error(formatFeeLine(treasuryFee));
-
     const outputs = [{ address: recipient, valueSatoshis: targetSats }];
-    if (treasuryFee && !treasuryFee.skipped) {
-      outputs.push({ address: treasuryFee.address, valueSatoshis: treasuryFee.valueSatoshis });
-    }
 
     // Estimate fee: per-byte * approximate tx size (P2PKH tx ~200 bytes per input + 34 per output + 10 overhead)
     const estSize = 10 + selected.length * 200 + outputs.length * 34 + 34; // +34 for change
     const estFee = BigInt(Math.ceil(estSize * FEE_RATE_SATS_PER_BYTE));
-    const change = total - targetSats - (treasuryFee && !treasuryFee.skipped ? treasuryFee.valueSatoshis : 0n) - estFee;
+    const change = total - targetSats - estFee;
 
     if (change >= DUST_THRESHOLD) {
       // Use a fresh change address from m/44'/145'/0'/1/i (the change chain).
@@ -127,9 +117,6 @@ async function main() {
       tx_hex,
       fee: fee.toString(),
       dry_run: !willBroadcast,
-      treasury_fee: treasuryFee && !treasuryFee.skipped
-        ? { address: treasuryFee.address, valueSatoshis: treasuryFee.valueSatoshis.toString(), bps: treasuryFee.bps }
-        : null,
     };
     if (!willBroadcast) {
       console.error('DRY RUN — set BCH_CONFIRM=yes to broadcast');

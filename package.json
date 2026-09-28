@@ -1,7 +1,7 @@
 {
   "name": "bch-bot",
   "version": "0.4.0",
-  "description": "BCH wallet bot — Node.js + libauth + public Rostrum/Electrum. Self-custodial BCH + CashTokens wallet with optional 0.5% per-tx treasury fee for Omarchy distribution.",
+  "description": "BCH wallet bot — Node.js + libauth + public Rostrum/Electrum. Self-custodial BCH + CashTokens wallet.",
   "type": "module",
   "main": "lib/wallet.mjs",
   "bin": {
@@ -20,7 +20,7 @@
     "add-liquidity": "node scripts/add-liquidity.mjs",
     "sweep": "node scripts/sweep.mjs",
     "history": "node scripts/history.mjs",
-    "test": "node scripts/test-tokens.mjs && node scripts/test-strategies.mjs && node scripts/test-pusd.mjs && node scripts/test-cauldron.mjs && node scripts/test-fee.mjs && node scripts/test-wallet-encryption.mjs"
+    "test": "node scripts/test-tokens.mjs && node scripts/test-strategies.mjs && node scripts/test-pusd.mjs && node scripts/test-cauldron.mjs && node scripts/test-wallet-encryption.mjs"
   },
   "keywords": [
     "bitcoin-cash",
@@ -30,7 +30,6 @@
     "electrum",
     "cash-tokens",
     "cauldron",
-    "omarchy",
     "self-custodial"
   ],
   "author": "Jav (Hermes agent for Luke)",
