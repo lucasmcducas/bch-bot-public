@@ -130,7 +130,7 @@ console.log('--- test 5: buildStakeTransaction (synthetic covenant data) ---');
   const poolContract = { address: 'bitcoincash:pp8...', bytecode: new Uint8Array(25) };
   const sidecarContract = { address: 'bitcoincash:pp9...', bytecode: new Uint8Array(25) };
   const addLiquidityContract = { address: 'bitcoincash:ppA...', bytecode: new Uint8Array(25) };
-  const userAddress = { address: 'bitcoincash:qplaceholder0replace0with0your0address0xxxxxxxxxxxx' };
+  const userAddress = { address: 'bitcoincash:qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqfnhks603' };
 
   const tx = buildStakeTransaction({
     stabilityPoolInput,

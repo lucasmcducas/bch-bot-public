@@ -47,7 +47,7 @@ function withEnv(env, fn) {
 }
 
 // Default config (test environment sets these in section 1)
-const ADDR = 'bitcoincash:qplaceholder0replace0with0your0address0xxxxxxxxxxxx';
+const ADDR = 'bitcoincash:qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqfnhks603';
 
 console.log('1. basic math (50 bps = 0.5%)');
 withEnv({

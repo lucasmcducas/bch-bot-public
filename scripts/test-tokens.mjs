@@ -93,7 +93,7 @@ console.log('--- test 2: createTokenOutput dust bump ---');
 {
   const cat = hex('c'.repeat(64));
   // Sub-dust amount: libauth bumps to 651 sats (verified during build)
-  const out = createTokenOutput({ address: 'bitcoincash:qplaceholder0replace0with0your0address0xxxxxxxxxxxx', category: cat, amount: 100n, satsAmount: 546n });
+  const out = createTokenOutput({ address: 'bitcoincash:qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqfnhks603', category: cat, amount: 100n, satsAmount: 546n });
   assert('dust-bumped from 546 → >546', Number(out.valueSatoshis) > 546);
   assert('lockingBytecode is Uint8Array', out.lockingBytecode instanceof Uint8Array);
   assert('lockingBytecode is P2PKH (25 bytes)', out.lockingBytecode.length === 25);
@@ -101,7 +101,7 @@ console.log('--- test 2: createTokenOutput dust bump ---');
   assert('token.category is 32-byte Uint8Array', out.token.category.length === 32);
 
   // High satsAmount preserved (above dust threshold)
-  const out2 = createTokenOutput({ address: 'bitcoincash:qplaceholder0replace0with0your0address0xxxxxxxxxxxx', category: cat, amount: 100n, satsAmount: 5000n });
+  const out2 = createTokenOutput({ address: 'bitcoincash:qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqfnhks603', category: cat, amount: 100n, satsAmount: 5000n });
   assert('high satsAmount (5000) preserved', out2.valueSatoshis === 5000n);
 }
 
@@ -110,7 +110,7 @@ console.log('--- test 3: createNftOutput ---');
 {
   const cat = hex('c'.repeat(64));
   const nft = createNftOutput({
-    address: 'bitcoincash:qplaceholder0replace0with0your0address0xxxxxxxxxxxx',
+    address: 'bitcoincash:qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqfnhks603',
     category: cat,
     capability: 'none',
     commitment: 'deadbeef',
@@ -121,7 +121,7 @@ console.log('--- test 3: createNftOutput ---');
 
   // Minting NFT
   const mintBaton = createNftOutput({
-    address: 'bitcoincash:qplaceholder0replace0with0your0address0xxxxxxxxxxxx',
+    address: 'bitcoincash:qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqfnhks603',
     category: cat,
     capability: 'minting',
     commitment: '',
@@ -220,8 +220,8 @@ console.log('--- test 7: end-to-end mock token send (no broadcast) ---');
   // computed, recipient output built with dust bump.
   const cat = hex('c'.repeat(64));
   const mockUtxos = [
-    { tx_hash: 'aa'.repeat(32), tx_pos: 0, value: 1000, token_data: { amount: '500', category: cat, address: 'bitcoincash:qplaceholder0replace0with0your0address0xxxxxxxxxxxx' } },
-    { tx_hash: 'bb'.repeat(32), tx_pos: 0, value: 10000, address: 'bitcoincash:qplaceholder0replace0with0your0address0xxxxxxxxxxxx' }, // BCH
+    { tx_hash: 'aa'.repeat(32), tx_pos: 0, value: 1000, token_data: { amount: '500', category: cat, address: 'bitcoincash:qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqfnhks603' } },
+    { tx_hash: 'bb'.repeat(32), tx_pos: 0, value: 10000, address: 'bitcoincash:qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqfnhks603' }, // BCH
   ];
   const sel = selectInputsForTokenSend({ allUtxos: mockUtxos, category: cat, tokenAmount: 200n, bchRequired: 1000n });
   assert('e2e: selected inputs', sel !== null);
@@ -233,7 +233,7 @@ console.log('--- test 7: end-to-end mock token send (no broadcast) ---');
   assert('e2e: recipient output built with dust bump', Number(recipientOut.valueSatoshis) > 546);
   // build FT change output (excess 500-200 = 300)
   const ftChangeOut = createTokenOutput({
-    address: 'bitcoincash:qplaceholder0replace0with0your0address0xxxxxxxxxxxx',
+    address: 'bitcoincash:qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqfnhks603',
     category: cat, amount: 300n,
   });
   assert('e2e: FT change output has amount 300', ftChangeOut.token.amount === 300n);
