@@ -17,7 +17,7 @@ provides=("${pkgname}")
 conflicts=("${pkgname}-git")
 source=("${pkgname}-${pkgver}.tar.gz::https://github.com/lucasmcducas/bch-bot-public/archive/refs/tags/v${pkgver}.tar.gz")
 # sha256sums updated at release time via `updpkgsums`
-sha256sums=('SKIP')  # Replace with real sha256sums before publishing to AUR
+sha256sums=('852509abc1673bcf190d80e020782e1cdab31cdb67f76e9c3cb1e88de78c6811')  # v0.4.1 source tarball
 
 build() {
   cd "${pkgname}-${pkgver}"
