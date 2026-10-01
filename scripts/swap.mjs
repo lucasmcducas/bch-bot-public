@@ -234,8 +234,50 @@ async function main() {
   console.error(`      router fee ${build.feeSats} sats, miner fee ${build.minerFeeSats} sats`);
   console.error(`      we sign input(s) ${JSON.stringify(build.inputsToSign)}`);
 
-  // The router names which inputs are ours; the funding list is in the same
-  // order it was sent, so index into it rather than guessing from a txid.
+  // The router names which inputs are OURS as indices into the transaction it
+  // built, which mixes our inputs with the pools' 27. It is NOT an index into
+  // `funding`.
+  //
+  // A live mainnet dry-run proved this: with 2 funding UTXOs the router
+  // returned inputsToSign [12, 13], and the old code looked those up in
+  // `funding` -- where index 12 does not exist, producing "no funding UTXO
+  // supplied for input 12". The error names an input that cannot exist, which
+  // is the tell that the two index spaces were being conflated.
+  //
+  // So map the router's index to a funding UTXO by outpoint: read the input's
+  // outpoint out of the built transaction and find the funding entry that
+  // spends the same txid:vout. The router is only permitted to name inputs we
+  // actually offered, so a name we cannot match is a refusal, not a guess.
+  const { decodeTransactionBCH } = await import('@bitauth/libauth');
+  const { hexToBin } = await import('../lib/hex.mjs');
+  const builtInputs = decodeTransactionBCH(hexToBin(build.unsignedTxHex)).inputs;
+
+  const byOutpoint = new Map(funding.map((u) => [`${u.txid}:${u.vout}`, u]));
+  const fundingForInput = new Map();   // router input index -> funding entry
+  for (const index of build.inputsToSign) {
+    const input = builtInputs[index];
+    if (!input) {
+      console.error(`REFUSING TO SIGN -- the router named input ${index}, but the built transaction has only ${builtInputs.length} inputs.`);
+      process.exit(3);
+    }
+    // Electrum and the transaction serialisation disagree on byte order, so
+    // match on both. Getting this backwards would look like "unknown UTXO".
+    const txid = Buffer.from(input.outpointTransactionHash).toString('hex');
+    const reversed = Buffer.from(input.outpointTransactionHash).reverse().toString('hex');
+    const vout = Number(input.outpointIndex);
+    const match = byOutpoint.get(`${txid}:${vout}`) || byOutpoint.get(`${reversed}:${vout}`);
+    if (!match) {
+      console.error(
+        `REFUSING TO SIGN -- the router wants us to sign input ${index}, which spends ` +
+        `${reversed}:${vout}, and that is not one of the UTXOs we offered.`
+      );
+      process.exit(3);
+    }
+    fundingForInput.set(index, match);
+  }
+
+  // The router names which inputs are ours; each must be one we funded. Keyed by
+  // the router's input index, not by position in `funding`.
   const signed = await signExternalTransaction({
     unsignedTxHex: build.unsignedTxHex,
     inputsToSign: build.inputsToSign,
@@ -244,11 +286,11 @@ async function main() {
     // The router says which inputs are ours; we say which UTXOs we meant to
     // spend. If those disagree, refuse rather than sign the router's choice.
     expectedInput: (index) => {
-      const utxo = funding[index];
+      const utxo = fundingForInput.get(index);
       return utxo ? { txid: utxo.txid, vout: Number(utxo.vout) } : null;
     },
     inputMaterial: (index) => {
-      const utxo = funding[index];
+      const utxo = fundingForInput.get(index);
       if (!utxo) throw new Error(`no funding UTXO supplied for input ${index}`);
       const derived = byAddress.get(utxo.address);
       if (!derived) throw new Error(`no key derivable for input ${index}`);
