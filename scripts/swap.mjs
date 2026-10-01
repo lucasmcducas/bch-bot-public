@@ -218,6 +218,13 @@ async function main() {
     unsignedTxHex: build.unsignedTxHex,
     inputsToSign: build.inputsToSign,
     sourceOutputs: build.sourceOutputs,
+    // Bind the router's choice of inputs to the funding set we actually chose.
+    // The router says which inputs are ours; we say which UTXOs we meant to
+    // spend. If those disagree, refuse rather than sign the router's choice.
+    expectedInput: (index) => {
+      const utxo = funding[index];
+      return utxo ? { txid: utxo.txid, vout: Number(utxo.vout) } : null;
+    },
     inputMaterial: (index) => {
       const utxo = funding[index];
       if (!utxo) throw new Error(`no funding UTXO supplied for input ${index}`);
