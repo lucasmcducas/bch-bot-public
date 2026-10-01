@@ -1,0 +1,134 @@
+name: ci
+
+# The test suite was only ever run by hand, and by the AUR build as a release
+# gate. Nothing ran it on a push. `test-cauldron.mjs` reaches
+# rostrum.cauldron.quest live, so a network blip could fail a merge for reasons
+# unrelated to the code -- which is why that suite is split out below rather
+# than run inline.
+#
+# The unused-import lint runs first and on its own: an import that names a
+# capability the file does not have is a documentation bug, and the 15 of them
+# in stake.mjs are why.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: tests (offline)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - run: npm ci
+
+      # Offline only. Every suite here is hermetic: fixed well-known seeds, temp
+      # directories, and real libauth transactions built in-process. None of them
+      # touches the network, so they cannot flake.
+      - name: unused-import lint
+        run: npm run lint
+
+      - name: tokens
+        run: node scripts/test-tokens.mjs
+      - name: pusd
+        run: node scripts/test-pusd.mjs
+      - name: wallet encryption
+        run: node scripts/test-wallet-encryption.mjs
+      - name: router
+        run: node scripts/test-router.mjs
+      - name: external signing
+        run: node scripts/test-external-signing.mjs
+      - name: send amount contract
+        run: node scripts/test-send-amount.mjs
+      - name: swap output verification
+        run: node scripts/test-swap-outputs.mjs
+      - name: wallet derivation
+        run: node scripts/test-wallet.mjs
+      - name: PUSD contract fingerprints
+        run: node scripts/test-pusd-fingerprints.mjs
+      - name: sweep token protection
+        run: node scripts/test-sweep-selection.mjs
+      - name: signer input binding
+        run: node scripts/test-signer-binding.mjs
+      - name: network layer
+        run: node scripts/test-network.mjs
+      - name: KDF parameters
+        run: node scripts/test-kdf-params.mjs
+
+      - name: every file parses
+        run: |
+          for f in lib/*.mjs scripts/*.mjs bin/bch-bot; do
+            node --check "$f"
+          done
+          echo "all files parse"
+
+      - name: no private key material in the repository
+        run: |
+          # A published mirror must never contain a seed, a WIF, or a
+          # wallet.json. The audit script covers known-bad strings; this is the
+          # structural version.
+          if git ls-files | grep -E '(^|/)(wallet|state)\.json$'; then
+            echo "::error::a wallet file is tracked in git"
+            exit 1
+          fi
+          # A WIF is 51 or 52 base58 characters. The leading character is fixed
+          # by the version byte: 0x80 -> '5' (mainnet uncompressed), 0xef -> '9'
+          # (testnet uncompressed), and the compressed forms start 'L'/'K'
+          # (mainnet) or 'c' (testnet). An earlier draft of this pattern was
+          # `[5KL9c][base58]{50,51}` -- it matched a real WIF, but I could not
+          # demonstrate that, because the "WIF" I tested it against was 63
+          # characters because I had typed it from memory. The pattern is only
+          # trustworthy once it has been shown to catch a real one, so the four
+          # known-good vectors below are asserted first: a scan that has never
+          # been seen to fire is the same category of bug as a gate that has
+          # never been seen to fail.
+          B58='[1-9A-HJ-NP-Za-km-z]'
+          WIF_RE="^[5KL9c]${B58}{50,51}$"
+          for vector in \
+            5HueCGU8rMjxEXxiPuD5BDku4MkFqeZyd4dZ1jvhTVqvbTLvyTJ \
+            KwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGgjKfgxNmY3FVXG \
+            91avARGdfge8E4tZfYLoxeJ5sEcderCtR4W5JsYZST1dmA47r2gH \
+            cMahea7zqjxrtgAbB7LSGbcQUr1uX1ojuat9jZodMN87JcbXMTcA
+          do
+            if ! printf '%s\n' "$vector" | grep -qE "$WIF_RE"; then
+              echo "::error::the WIF pattern does not match a known-good vector; the scan is broken"
+              exit 1
+            fi
+          done
+          if grep -rIEq "$WIF_RE" --exclude-dir=node_modules --exclude-dir=.git .; then
+            echo "::error::a WIF private key appears to be committed"
+            grep -rIE "$WIF_RE" --exclude-dir=node_modules --exclude-dir=.git . || true
+            exit 1
+          fi
+          echo "no key material committed (WIF pattern verified against 4 known-good vectors)"
+
+      - name: audit-public
+        run: ./audit-public.sh
+
+  # Kept separate and allowed to fail, because it is the one suite that depends
+  # on a third-party host. It is genuinely useful -- it is how we found that
+  # broadcast.cauldron.quest was failing its TLS handshake -- but a Rostrum
+  # outage must not block a merge.
+  network:
+    name: cauldron suites (needs rostrum; advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+      - name: cauldron pools (live Rostrum)
+        run: node scripts/test-cauldron.mjs
