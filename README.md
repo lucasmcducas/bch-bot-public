@@ -53,22 +53,48 @@ npm ci
 for f in scripts/test-*.mjs; do echo "=== $f ==="; node "$f" 2>&1 | tail -1; done
 ```
 
-Expected output (verified 2026-09-28 against the public mirror):
+Expected output (verified 2026-10-01 against the public mirror):
 
 ```
-=== scripts/test-tokens.mjs ===
-RESULT: 40 passed, 0 failed (40 total)
-=== scripts/test-strategies.mjs ===
-RESULT: 43 passed, 0 failed (43 total)
-=== scripts/test-pusd.mjs ===
-RESULT: 33 passed, 0 failed (33 total)
-=== scripts/test-cauldron.mjs ===
-RESULT: 38 passed, 0 failed (38 total)
-=== scripts/test-wallet-encryption.mjs ===
-PASSED 31, FAILED 0
+$ npm test
+lint-unused: clean (40 files checked, 0 unused imports)
+RESULT: 40 passed, 0 failed (40 total)     test-tokens.mjs
+RESULT: 33 passed, 0 failed (33 total)     test-pusd.mjs
+RESULT: 38 passed, 0 failed (38 total)     test-cauldron.mjs
+PASSED 31, FAILED 0                        test-wallet-encryption.mjs
+RESULT: 18 passed, 0 failed (18 total)     test-router.mjs
+RESULT: 12 passed, 0 failed (12 total)     test-external-signing.mjs
+RESULT: 20 passed, 0 failed (20 total)     test-send-amount.mjs
+RESULT: 12 passed, 0 failed (12 total)     test-swap-outputs.mjs
+RESULT: 38 passed, 0 failed (38 total)     test-wallet.mjs
+RESULT: 36 passed, 0 failed (36 total)     test-pusd-fingerprints.mjs
+RESULT: 27 passed, 0 failed (27 total)     test-sweep-selection.mjs
+RESULT:  7 passed, 0 failed ( 7 total)     test-signer-binding.mjs
+RESULT: 47 passed, 0 failed (47 total)     test-network.mjs
+RESULT: 29 passed, 0 failed (29 total)     test-kdf-params.mjs
 ```
 
-Total: 185 unit tests across 5 files. If you see a different count, please open an issue.
+Total: **388 assertions across 14 files**, plus the unused-import lint. Run `npm run lint`
+on its own for just that check.
+
+Note on counting: `test-wallet-encryption.mjs` uses a different runner that prints
+`PASSED n, FAILED n` rather than a `RESULT:` line, so grepping only for `RESULT:`
+under-reports the total. A test that passes is not automatically a test that can
+fail — see the note below.
+
+### What was removed, and why
+
+`scripts/test-strategies.mjs` (43 assertions) was deleted. It contained **zero
+imports**: every assertion checked values constructed as literals a few lines
+above it, and one block defined `sighashFor` inside the test and then asserted on
+the test's own function. It could not fail under any defect in `lib/`.
+
+What it claimed to cover is covered for real elsewhere: sighash flag selection
+(`0x41`/`0x61`) by `test-external-signing.mjs` and `test-pusd.mjs`; the PUSD
+receipt commitment by `test-pusd.mjs`; token output shape by `test-tokens.mjs`.
+A test that cannot fail is not coverage — it is the largest block of false
+confidence a suite can contain, and it makes the count look healthier than the
+suite is.
 
 ## Network configuration (Rostrum)
 
