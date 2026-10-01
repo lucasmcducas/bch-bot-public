@@ -130,7 +130,7 @@ async function main() {
   console.error('[2/4] collecting funding UTXOs...');
   const addrs = deriveReceivingAddresses(20);
   const byAddress = new Map(addrs.map((a) => [a.address, a]));
-  const client = await connect();
+  const client = await connect(w.network);
   const funding = [];
   try {
     for (const a of addrs) {
