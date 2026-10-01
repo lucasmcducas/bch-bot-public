@@ -100,7 +100,8 @@ This public mirror is **the source of truth for everything except the maintainer
 
 - All `lib/*.mjs` files in the public mirror are byte-identical to the private repo's `lib/` (modulo default values which are empty in public).
 - All `scripts/*.mjs` files in the public mirror are byte-identical.
-- The only differences are: (a) `config/default.json` has empty default destinations in public, the maintainer's config in private; (b) `bin/bch-bot` is missing from the public repo (a rebase would re-add it); (c) `~/bch-wallet-mainnet/` exists in private only.
+- The private repo additionally holds the maintainer's own wallet configuration and
+  a separately kept mainnet wallet directory, neither of which belongs in a public tree.
 
 If you find divergence, please open an issue.
 
