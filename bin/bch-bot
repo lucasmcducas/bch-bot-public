@@ -1,0 +1,113 @@
+#!/usr/bin/env node
+// bin/bch-bot — single entry point that dispatches to scripts/*.mjs based on subcommand
+//
+// Usage:
+//   bch-bot create-wallet        # create new BIP39 wallet
+//   bch-bot address              # show receiving address
+//   bch-bot balance              # show balance (BCH + tokens)
+//   bch-bot utxos                # list UTXOs
+//   bch-bot send <addr> <amt>   # send BCH (BCH_CONFIRM=yes required to broadcast)
+//   bch-bot send-token <addr> <cat> <amt>
+//   bch-bot swap <supply> <demand> <amount>
+//   bch-bot stake
+//   bch-bot add-liquidity <token_id> <bch_sats> <token_amt> [--first]
+//   bch-bot sweep
+//   bch-bot history
+//
+// All scripts live in scripts/*.mjs and use the same node_modules + lib/ code.
+// This shim just runs them with the correct argv.
+
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+import { existsSync } from 'node:fs';
+
+// Where lib/ and scripts/ live. The shim is at /usr/bin/bch-bot when packaged
+// but at <root>/bin/bch-bot in a source tree, and the code it dispatches to is
+// in neither of those directories' parents in the packaged case. So probe
+// candidates rather than trusting the script's own location:
+//
+//   1. BCH_ROOT, when the caller sets it explicitly.
+//   2. <script dir>/..          -- source tree / git clone.
+//   3. /usr/lib/bch-bot         -- the packaged location.
+//
+// Probing beats a /etc/profile.d entry here on purpose: a profile file is only
+// read by login shells, and the one caller that matters most -- the Omarchy bar
+// widget -- is spawned by the systemd user session, which never sources it.
+const CANDIDATE_ROOTS = [
+  process.env.BCH_ROOT,
+  join(__dirname, '..'),
+  '/usr/lib/bch-bot',
+].filter(Boolean);
+
+const repoRoot = CANDIDATE_ROOTS.find((root) => existsSync(join(root, 'scripts')));
+const scriptsDir = repoRoot ? join(repoRoot, 'scripts') : join(CANDIDATE_ROOTS[0] || __dirname, 'scripts');
+
+if (!repoRoot) {
+  console.error('bch-bot: could not locate the bch-bot runtime.');
+  console.error('Looked for a scripts/ directory under:');
+  for (const root of CANDIDATE_ROOTS) console.error(`  ${root}`);
+  console.error('Set BCH_ROOT to the directory containing scripts/ and lib/.');
+  process.exit(3);
+}
+
+const SCRIPT_MAP = {
+  'create-wallet': 'create-wallet.mjs',
+  'encrypt-wallet': 'encrypt-wallet.mjs',
+  'address': 'address.mjs',
+  'balance': 'balance.mjs',
+  'utxos': 'utxos.mjs',
+  'history': 'history.mjs',
+  'send': 'send.mjs',
+  'send-token': 'send-token.mjs',
+  'swap': 'swap.mjs',
+  'stake': 'stake.mjs',
+  'add-liquidity': 'add-liquidity.mjs',
+  'sweep': 'sweep.mjs',
+  'round-trip': 'round-trip.mjs',
+};
+
+const subcommand = process.argv[2];
+if (!subcommand || subcommand === '--help' || subcommand === '-h') {
+  console.log('bch-bot — self-custodial BCH wallet CLI');
+  console.log();
+  console.log('Usage: bch-bot <subcommand> [args...]');
+  console.log();
+  console.log('Subcommands:');
+  for (const [name, file] of Object.entries(SCRIPT_MAP)) {
+    console.log(`  ${name.padEnd(20)} ${file}`);
+  }
+  console.log();
+  console.log('Environment:');
+  console.log('  BCH_WALLET_DIR       wallet directory (default ~/.bch-wallet)');
+  console.log('  BCH_NETWORK          mainnet | chipnet (default mainnet)');
+  console.log('  BCH_CONFIRM          yes | no (default no; required for broadcast)');
+  console.log('  BCH_ALLOW_UNCONFIRMED  yes | no (default no; 0-conf risk gate)');
+  console.log('  BCH_ROSTRUM          rostrum host:port (default cashnode.bch.ninja:50004)');
+  console.log('  BCH_CAULDRON_ROSTRUM cauldron rostrum host:port (default rostrum.cauldron.quest:50004)');
+  console.log('  BCH_ROOT             install root holding lib/ and scripts/ (set by the package)');
+  process.exit(0);
+}
+
+const scriptFile = SCRIPT_MAP[subcommand];
+if (!scriptFile) {
+  console.error(`Unknown subcommand: ${subcommand}`);
+  console.error(`Run 'bch-bot --help' for available subcommands.`);
+  process.exit(2);
+}
+
+const scriptPath = join(scriptsDir, scriptFile);
+
+// Hand off argv[3..] to the script. Preserve env. Use node so we don't lose TTY.
+const child = spawn(process.execPath, [scriptPath, ...process.argv.slice(3)], {
+  stdio: 'inherit',
+  env: process.env,
+});
+
+child.on('exit', (code) => {
+  process.exit(code ?? 1);
+});

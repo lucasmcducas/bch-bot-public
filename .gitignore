@@ -1,9 +1,6 @@
 # Dependencies
 node_modules/
 
-# Build / lockfile (regenerate via `npm install`)
-package-lock.json
-
 # Logs
 *.log
 npm-debug.log*

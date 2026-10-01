@@ -1,12 +1,22 @@
 # bch-bot .install script
 # Runs at install/upgrade/removal time.
 
+# The shim lands at /usr/bin/bch-bot but the code it dispatches to lives in
+# /usr/lib/bch-bot. Without BCH_ROOT the shim resolves its own directory's
+# parent, which for /usr/bin is /usr -- so every subcommand would look for
+# /usr/scripts and fail. This profile is what makes the packaged CLI work.
+_bch_root() {
+  echo 'export BCH_ROOT=/usr/lib/bch-bot'
+}
+
 post_install() {
+  _bch_root > /etc/profile.d/bch-bot.sh
+  chmod 0644 /etc/profile.d/bch-bot.sh
+
   echo "==> bch-bot installed."
   echo "    Run 'bch-bot create-wallet' to generate a new wallet."
   echo "    Set BCH_WALLET_DIR to choose where the wallet is stored (default: ~/.bch-wallet)."
-  echo "    Edit ~/.config/bch-bot/config.json (copied from /etc/skel/.config/bch-bot/config.json)"
-  echo "    to configure the treasury fee address."
+  echo "    Your wallet lives OUTSIDE the package and is never touched by upgrades."
 }
 
 post_upgrade() {
@@ -20,5 +30,6 @@ pre_remove() {
 }
 
 post_remove() {
+  rm -f /etc/profile.d/bch-bot.sh
   echo "==> bch-bot removed. Wallet files (if any) remain in place."
 }

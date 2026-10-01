@@ -1,6 +1,6 @@
 {
   "name": "bch-bot",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "BCH wallet bot — Node.js + libauth + public Rostrum/Electrum. Self-custodial BCH + CashTokens wallet.",
   "type": "module",
   "main": "lib/wallet.mjs",
