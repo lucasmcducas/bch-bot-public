@@ -23,7 +23,7 @@ import { connect, scripthashForAddress } from '../lib/network.mjs';
 import { loadWallet, loadHdNode, deriveReceivingAddresses, newChangeAddress, deriveChildPrivKey } from '../lib/wallet.mjs';
 import { addressToLockingBytecode, signExternalTransaction } from '../lib/sign.mjs';
 import { binToHex } from '../lib/hex.mjs';
-import { quote, buildSwap, verifyBuildAgainstQuote, verifyTransactionOutputs, broadcastSwap, resolveToken, bchToBaseUnits, toBaseUnits } from '../lib/router.mjs';
+import { quote, buildSwap, verifyBuildAgainstQuote, verifyTransactionOutputs, broadcastViaElectrum, broadcastSwap, resolveToken, bchToBaseUnits, toBaseUnits } from '../lib/router.mjs';
 
 // The largest "output to an address we do not control" we are willing to accept.
 //
@@ -210,6 +210,16 @@ async function main() {
     expectedReceiveAddresses: [receiveAddr],
     changeAddresses: [changeAddr],
     maxFeeSats: routerFeeCeiling(build),
+    // A BCH -> PUSD swap has no token outputs (it sells plain BCH). A
+    // PUSD -> BCH swap has many, all paying pool covenants, and every one must
+    // be PUSD -- the asset actually being sold.
+    expectedSellTokenCategory: sellTok.categoryId === 'bch' ? null : sellTok.categoryId,
+    // The route the user agreed to: how many pools the quote said, and how much
+    // BCH the inputs carry. Together these make the built transaction checkable
+    // rather than merely self-consistent.
+    maxSellValueSats: sellTok.categoryId === 'bch' ? amountBase : null,
+    expectedPoolCount: q.poolCount,
+    maxInputValueSats: funding.reduce((acc, u) => acc + BigInt(u.value), 0n),
   });
   if (!outputCheck.ok) {
     console.error('REFUSING TO SIGN -- the built transaction pays an address we do not control:');
@@ -269,8 +279,50 @@ async function main() {
   }
 
   console.error('[4/4] broadcasting...');
-  const { txid } = await broadcastSwap(signed.txHex);
+  // Broadcast over Electrum first, using a fresh connection. The HTTP endpoint
+  // is a fallback, not the primary: it is a third-party service that was
+  // serving zero bytes over TLS, and a swap never needed it -- Electrum's
+  // `blockchain.transaction.broadcast` is how every other command in this repo
+  // already broadcasts, and the mainnet servers accept token outputs.
+  const txid = await broadcastSwapWithFallback(w.network, signed.txHex);
   console.log(JSON.stringify({ ...out, dry_run: false, broadcast: true, txid }, null, 2));
+}
+
+// Broadcast, preferring Electrum and falling back to the router's HTTP endpoint.
+//
+// Both paths are reported in the error if both fail, because "the swap failed"
+// and "the broadcast failed" are different problems and the user needs to know
+// which. A failure to broadcast is NOT a failure to sign: the signed hex is
+// already valid and can be broadcast by hand, so that is included in the error.
+async function broadcastSwapWithFallback(network, signedTxHex) {
+  const attempts = [];
+
+  let client = null;
+  try {
+    client = await connect(network);
+    const r = await broadcastViaElectrum(client, signedTxHex);
+    console.error(`      broadcast via Electrum (${network}), txid ${r.txid}`);
+    return r.txid;
+  } catch (e) {
+    attempts.push(`electrum(${network}): ${e.message}`);
+  } finally {
+    if (client) await client.disconnect().catch(() => {});
+  }
+
+  try {
+    const r = await broadcastSwap(signedTxHex);
+    console.error(`      broadcast via the Cauldron HTTP endpoint, txid ${r.txid}`);
+    return r.txid;
+  } catch (e) {
+    attempts.push(`cauldron http: ${e.message}`);
+  }
+
+  throw new Error(
+    `could not broadcast the signed transaction by either path:\n` +
+    attempts.map((a) => `  - ${a}`).join('\n') +
+    `\n\nThe transaction IS signed and valid. Its hex is above; it can be broadcast\n` +
+    `by hand, or the swap can be retried once a path is reachable.`
+  );
 }
 
 main().catch((e) => { console.error('error:', e.message); process.exit(1); });
