@@ -39,7 +39,7 @@ try {
     await import('@bitauth/libauth');
   const { createWallet, loadWallet, loadHdNode, deriveChildPrivKey, deriveAddress,
           deriveReceivingAddresses, deriveChangeAddresses, resolveAddressPath,
-          newReceivingAddress, newChangeAddress, walletPaths } = await import('../lib/wallet.mjs');
+          newReceivingAddress, newChangeAddress, walletPaths, resolveWalletPaths } = await import('../lib/wallet.mjs');
 
   const MNEMONIC = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
   const seed = deriveSeedFromBip39Mnemonic(MNEMONIC, { passphrase: '' });
@@ -154,6 +154,35 @@ try {
     eq(w.version, 1, 'version: ');
     const p = walletPaths();
     ok(p.wallet === walletFile, 'walletPaths must point at the wallet we wrote');
+  }
+
+  console.log('--- the wallet path has exactly one source of truth ---');
+  {
+    // lib/wallet.mjs and scripts/encrypt-wallet.mjs used to derive this path
+    // independently from the same expression. If they diverged, encrypt-wallet
+    // would have rewritten a different file than the CLI reads, and the wallet
+    // would look like it had lost its funds.
+    const viaEnv = resolveWalletPaths({ BCH_WALLET_DIR: '/tmp/explicit-dir' });
+    eq(viaEnv.dir, '/tmp/explicit-dir', 'explicit dir: ');
+    eq(viaEnv.wallet, '/tmp/explicit-dir/wallet.json', 'explicit wallet path: ');
+    eq(viaEnv.state, '/tmp/explicit-dir/state.json', 'explicit state path: ');
+
+    const viaHome = resolveWalletPaths({ HOME: '/home/someone' });
+    eq(viaHome.dir, '/home/someone/.bch-wallet', 'default under HOME: ');
+    eq(viaHome.wallet, '/home/someone/.bch-wallet/wallet.json', 'default wallet path: ');
+
+    // BCH_WALLET_DIR wins over HOME, and an empty value falls back rather than
+    // producing a relative path.
+    eq(resolveWalletPaths({ BCH_WALLET_DIR: '/tmp/a', HOME: '/home/b' }).dir, '/tmp/a', 'env wins: ');
+    eq(resolveWalletPaths({ BCH_WALLET_DIR: '', HOME: '/home/b' }).dir, '/home/b/.bch-wallet', 'empty env falls back: ');
+
+    // The module-level walletPaths() must agree with resolveWalletPaths() for
+    // the same environment -- that agreement is the whole point.
+    const now = resolveWalletPaths();
+    const p = walletPaths();
+    eq(p.dir, now.dir, 'walletPaths dir must match resolveWalletPaths: ');
+    eq(p.wallet, now.wallet, 'walletPaths wallet must match resolveWalletPaths: ');
+    eq(p.state, now.state, 'walletPaths state must match resolveWalletPaths: ');
   }
 
   console.log('--- new address counters advance and stay in-bounds ---');

@@ -18,13 +18,16 @@ import {
   isEncrypted,
   isPlaintext,
 } from '../lib/wallet-encryption.mjs';
+import { resolveWalletPaths } from '../lib/wallet.mjs';
 import { readFileSync, writeFileSync, chmodSync, existsSync, copyFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { stdin, stdout } from 'node:process';
 
-const WALLET_DIR = process.env.BCH_WALLET_DIR || join(process.env.HOME || '/root', '.bch-wallet');
-const WALLET_FILE = join(WALLET_DIR, 'wallet.json');
+// Resolved by the wallet module, not recomputed here. This file used to derive
+// the same path independently from lib/wallet.mjs. If the two ever disagreed,
+// this script would have encrypted a different file than the CLI reads, and the
+// wallet would look like it had lost its funds.
+const { wallet: WALLET_FILE } = resolveWalletPaths();
 
 async function promptHidden(question) {
   // Minimal hidden-prompt for Unix terminals. We disable echo by putting the
