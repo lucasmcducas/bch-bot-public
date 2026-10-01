@@ -8,7 +8,7 @@
 //   Set BCH_CONFIRM=yes env var to actually broadcast (moth convention).
 
 import { connect, scripthashForAddress } from '../lib/network.mjs';
-import { loadWallet, loadHdNode, deriveReceivingAddresses, newChangeAddress, deriveChangeAddresses } from '../lib/wallet.mjs';
+import { loadWallet, loadHdNode, resolveAddressPath, newChangeAddress } from '../lib/wallet.mjs';
 import { signP2pkhTransaction } from '../lib/sign.mjs';
 import { bchToBaseUnits, baseUnitsToBch } from '../lib/router.mjs';
 import { binToHex } from '../lib/hex.mjs';
@@ -122,19 +122,15 @@ async function main() {
       }
 
     // 3. Map UTXOs to signing inputs (each needs hdNode + derivation path)
-    // For Phase 1 simplicity, derive all inputs from the same change=0 chain
-    const inputsForSigning = selected.map((u) => {
-      // Find the index by searching the derived addresses
-      const addrs = deriveReceivingAddresses(20);
-      const idx = addrs.findIndex((a) => a.address === u.address);
-      return {
-        ...u,
-        hdNode,
-        account: w.account || 0,
-        change: 0,
-        index: idx >= 0 ? idx : 0,
-      };
-    });
+    // Resolve each input's BIP44 path by looking the address up, never by
+    // defaulting to index 0. An address outside the gap-limit window used to
+    // resolve to 0, which signs with the wrong key.
+    const inputsForSigning = selected.map((u) => ({
+      ...u,
+      hdNode,
+      account: w.account || 0,
+      ...resolveAddressPath(u.address, { window: 20, label: 'input UTXO' }),
+    }));
 
     // 4. Sign
     const { tx_hex, tx_hash, fee } = await signP2pkhTransaction({

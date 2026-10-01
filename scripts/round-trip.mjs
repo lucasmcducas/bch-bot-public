@@ -18,7 +18,7 @@
 // Run: BCH_CONFIRM=yes node scripts/round-trip.mjs
 
 import { connect, scripthashForAddress } from '../lib/network.mjs';
-import { loadWallet, loadHdNode, deriveReceivingAddresses, deriveChangeAddresses, newChangeAddress } from '../lib/wallet.mjs';
+import { loadWallet, loadHdNode, resolveAddressPath, newChangeAddress } from '../lib/wallet.mjs';
 import { signP2pkhTransaction } from '../lib/sign.mjs';
 import { binToHex } from '../lib/hex.mjs';
 
@@ -102,13 +102,14 @@ async function main() {
     }
     console.log(`       fee     =~${estFee} sats (${estSize} bytes * ${FEE_RATE_SATS_PER_BYTE} sat/byte)`);
 
-    // Step 4: sign
+    // Step 4: sign. findIndex would return -1 for an address outside the scan
+    // window, and a -1 index is a silently wrong derivation path, so resolve the
+    // address against both chains and fail if it is not ours.
     const inputForSigning = {
       ...input,
       hdNode,
       account: 0,
-      change: 0,
-      index: addrs.findIndex((a) => a.address === input.address),
+      ...resolveAddressPath(input.address, { window: 20, label: 'round-trip input' }),
     };
     console.log(`[4/6] signing with libauth compiler (Schnorr P2PKH)...`);
     const signed = await signP2pkhTransaction({ inputs: [inputForSigning], outputs });

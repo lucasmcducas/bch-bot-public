@@ -25,6 +25,7 @@ import {
   deriveReceivingAddresses,
   deriveChangeAddresses,
   newChangeAddress,
+  resolveAddressPath,
 } from '../lib/wallet.mjs';
 import { signP2pkhTransaction } from '../lib/sign.mjs';
 
@@ -71,10 +72,18 @@ function selectSweepCandidates(utxos) {
 }
 
 function deriveChangeIndex(addr, recvAddrs, changeAddrs) {
+  // Look the address up; never default to index 0. Falling back there signs a
+  // UTXO with the key for /0/0, which is a different key from the one the
+  // address was derived from. An unresolvable address is an error.
   const recvIdx = recvAddrs.findIndex((a) => a.address === addr);
   if (recvIdx >= 0) return { account: 0, change: 0, index: recvIdx };
   const chgIdx = changeAddrs.findIndex((a) => a.address === addr);
-  return { account: 0, change: 1, index: chgIdx >= 0 ? chgIdx : 0 };
+  if (chgIdx >= 0) return { account: 0, change: 1, index: chgIdx };
+  throw new Error(
+    `cannot resolve the key for sweep input ${addr}: it is outside the ${recvAddrs.length}-address ` +
+    `gap limit this sweep scans. Widen the scan rather than guessing an index, because a ` +
+    `wrong index signs with the wrong key.`
+  );
 }
 
 async function main() {

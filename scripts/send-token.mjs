@@ -18,6 +18,7 @@ import {
   deriveReceivingAddresses,
   deriveChangeAddresses,
   newChangeAddress,
+  resolveAddressPath,
 } from '../lib/wallet.mjs';
 import { signP2pkhTransaction } from '../lib/sign.mjs';
 import {
@@ -181,18 +182,17 @@ async function main() {
       console.error(`   BCH change ${bchChange} sats below dust; absorbed into fee`);
     }
 
-    // Map inputs to signing shape (needs hdNode + derivation path per input)
-    const inputs = rawInputs.map((u) => {
-      const recvIdx = deriveReceivingAddresses(20).findIndex((a) => a.address === u.address);
-      const chgIdx = deriveChangeAddresses(20).findIndex((a) => a.address === u.address);
-      return {
-        ...u,
-        hdNode,
-        account: 0,
-        change: recvIdx >= 0 ? 0 : 1,
-        index: recvIdx >= 0 ? recvIdx : chgIdx,
-      };
-    });
+    // Map inputs to signing shape (needs hdNode + derivation path per input).
+    // The previous version assumed "not a receive address" implies "a change
+    // address", so an address in neither list produced change: 1 with index -1
+    // -- a receiving-chain UTXO signed with a change-chain key. Resolve against
+    // both chains and fail if the address is in neither.
+    const inputs = rawInputs.map((u) => ({
+      ...u,
+      hdNode,
+      account: 0,
+      ...resolveAddressPath(u.address, { window: 20, label: 'token input UTXO' }),
+    }));
 
     // Map token outputs to libauth's output shape (signP2pkhTransaction expects
     // {address, valueSatoshis, token?} for each output). Token outputs already
