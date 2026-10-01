@@ -29,7 +29,6 @@
 
 import { connect, scripthashForAddress } from '../lib/network.mjs';
 import { connectCauldronRostrum, fetchPools } from '../lib/cauldron.mjs';
-import { NATIVE_BCH_TOKEN_ID } from '@cashlab/common';
 import {
   loadWallet,
   loadHdNode,
@@ -38,9 +37,8 @@ import {
   newChangeAddress,
 } from '../lib/wallet.mjs';
 import { signP2pkhTransaction } from '../lib/sign.mjs';
-import { signCovenantInput, buildCovenantUnlockingBytecode } from '../lib/cashscript.mjs';
-import { secp256k1, hash160, encodeCashAddress, CashAddressType } from '@bitauth/libauth';
-import { binToHex, hexToBin } from '../lib/hex.mjs';
+import { secp256k1, hash160 } from '@bitauth/libauth'
+import { hexToBin } from '../lib/hex.mjs'
 
 function parseArgs() {
   const args = process.argv.slice(2);

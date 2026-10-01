@@ -22,13 +22,11 @@ import {
 } from '../lib/wallet.mjs';
 import { signP2pkhTransaction } from '../lib/sign.mjs';
 import {
-  utxoToTokenPrefix,
   createTokenOutput,
   createNftOutput,
   sumFtBalances,
   selectInputsForTokenSend,
-} from '../lib/tokens.mjs';
-import { binToHex } from '../lib/hex.mjs';
+} from '../lib/tokens.mjs'
 
 const FEE_RATE_SATS_PER_BYTE = 1.0;
 const DUST_THRESHOLD = 546n;

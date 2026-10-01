@@ -9,7 +9,6 @@
 //   5. LIVE: quote a swap against real pools
 
 import { ExchangeLab } from '@cashlab/cauldron';
-import { NATIVE_BCH_TOKEN_ID } from '@cashlab/common';
 
 let verbose = process.argv.includes('--verbose') || process.argv.includes('-v');
 let pass = 0, fail = 0;

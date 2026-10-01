@@ -22,8 +22,7 @@ import {
   deriveReceivingAddresses,
   deriveChangeAddresses,
   newChangeAddress,
-  resolveAddressPath,
-} from '../lib/wallet.mjs';
+} from '../lib/wallet.mjs'
 import { signP2pkhTransaction } from '../lib/sign.mjs';
 
 const SWEEP_THRESHOLD_SATS = 5000n;     // sweep any UTXO below this

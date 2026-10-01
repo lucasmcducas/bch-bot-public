@@ -10,8 +10,7 @@
 import { connect, scripthashForAddress } from '../lib/network.mjs';
 import { loadWallet, loadHdNode, resolveAddressPath, newChangeAddress } from '../lib/wallet.mjs';
 import { signP2pkhTransaction } from '../lib/sign.mjs';
-import { bchToBaseUnits, baseUnitsToBch } from '../lib/router.mjs';
-import { binToHex } from '../lib/hex.mjs';
+import { bchToBaseUnits } from '../lib/router.mjs'
 
 const FEE_RATE_SATS_PER_BYTE = 1.0; // conservative; mainnet often 1.0–2.0
 const DUST_THRESHOLD = 546n;

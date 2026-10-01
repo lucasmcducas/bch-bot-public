@@ -15,7 +15,6 @@ import {
   validateStakeAmount,
 } from '../lib/pusd.mjs';
 import { buildCovenantUnlockingBytecode, SigningSerializationFlag } from '../lib/cashscript.mjs';
-import { hexToBin } from '../lib/hex.mjs';
 
 let verbose = process.argv.includes('--verbose') || process.argv.includes('-v');
 let pass = 0, fail = 0;

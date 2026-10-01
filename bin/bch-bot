@@ -20,11 +20,10 @@
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-import { existsSync } from 'node:fs';
 
 // Where lib/ and scripts/ live. The shim is at /usr/bin/bch-bot when packaged
 // but at <root>/bin/bch-bot in a source tree, and the code it dispatches to is

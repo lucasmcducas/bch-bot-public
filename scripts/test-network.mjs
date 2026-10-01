@@ -11,7 +11,7 @@
 // Bitcoin txid rule and would produce a different, wrong answer.
 
 import { scripthashForAddress, connect, SERVERS } from '../lib/network.mjs';
-import { cashAddressToLockingBytecode, encodeLockingBytecodeP2pkh, lockingBytecodeToCashAddress, sha256 } from '@bitauth/libauth';
+import { encodeLockingBytecodeP2pkh, lockingBytecodeToCashAddress, sha256 } from '@bitauth/libauth'
 
 let passed = 0;
 let failed = 0;

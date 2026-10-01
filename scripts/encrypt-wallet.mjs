@@ -11,7 +11,6 @@
 //
 // SAFETY: this rewrites wallet.json. Back up first if you care.
 
-import { loadWallet } from '../lib/wallet.mjs';
 import {
   encryptPlaintextWallet,
   decryptEncryptedWallet,

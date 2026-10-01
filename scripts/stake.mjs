@@ -28,24 +28,15 @@
 //   - Prints dry-run JSON with tx_hash, tx_hex, fee
 //   - With BCH_CONFIRM=yes, broadcasts via blockchain.transaction.broadcast
 
-import { connect, scripthashForAddress } from '../lib/network.mjs';
+import { scripthashForAddress } from '../lib/network.mjs'
 import {
   loadWallet,
-  loadHdNode,
-  deriveReceivingAddresses,
-  deriveChangeAddresses,
-  newChangeAddress,
-} from '../lib/wallet.mjs';
-import { signP2pkhTransaction } from '../lib/sign.mjs';
+} from '../lib/wallet.mjs'
 import {
   PUSD_CATEGORY_ID,
   POOL_CATEGORY_ID,
   MIN_STAKE_BASE_UNITS,
-  buildStakeTransaction,
-} from '../lib/pusd.mjs';
-import { signCovenantInput, buildCovenantUnlockingBytecode, SigningSerializationFlag } from '../lib/cashscript.mjs';
-import { deriveAddress } from '../lib/wallet.mjs';
-import { secp256k1, hash160, encodeCashAddress, CashAddressType } from '@bitauth/libauth';
+} from '../lib/pusd.mjs'
 
 const FEE_RATE_SATS_PER_BYTE = 1n;
 const DUST_THRESHOLD = 546n;

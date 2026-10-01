@@ -20,7 +20,6 @@
 import { connect, scripthashForAddress } from '../lib/network.mjs';
 import { loadWallet, loadHdNode, resolveAddressPath, newChangeAddress } from '../lib/wallet.mjs';
 import { signP2pkhTransaction } from '../lib/sign.mjs';
-import { binToHex } from '../lib/hex.mjs';
 
 const ROUND_TRIP_AMOUNT_SATS = 1000n;
 const FEE_RATE_SATS_PER_BYTE = 1.0;
