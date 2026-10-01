@@ -1,106 +1,215 @@
 #!/usr/bin/env node
-// scripts/swap.mjs — execute a Cauldron AMM swap (BCH ↔ token)
+// scripts/swap.mjs — swap BCH or a CashToken on Cauldron, via the Riften Router.
 //
 // Usage:
-//   node scripts/swap.mjs <supply> <demand> <amount>          # dry-run, build + show tx
-//   BCH_CONFIRM=yes node scripts/swap.mjs ...                  # broadcast
+//   node scripts/swap.mjs <sell> <buy> <amount>                    # dry-run
+//   BCH_CONFIRM=yes node scripts/swap.mjs <sell> <buy> <amount>    # broadcast
 //
-// Example:
-//   node scripts/swap.mjs BCH pusd 1000                       # sell 1000 sats BCH for PUSD
-//   node scripts/swap.mjs pusd BCH 100                        # sell 100 PUSD for BCH
+// Examples:
+//   node scripts/swap.mjs BCH pusd 0.01        # sell 0.01 BCH, receive PUSD
+//   node scripts/swap.mjs pusd BCH 1.50        # sell 1.50 PUSD, receive BCH
+//   node scripts/swap.mjs BCH pusd 0.01 --quote-only
 //
-// Supply/demand token IDs are 64-char hex category ids (or 'BCH' for native).
-// Amount is in base units (sats for BCH, token base units for tokens).
+// <sell>/<buy> accept a symbol (pusd, roach) or a 64-char category hex; 'bch'
+// is native. A BCH amount is in display units (8 dp); a token amount is in base
+// units, because the router's protocol is integer base units throughout.
 //
-// PRE-REQUISITES:
-//   - Live Cauldron pools exist on mainnet (currently EMPTY per test-cauldron.mjs)
-//   - Bot's wallet has a BCH-only input to pay the pool + fee
-//   - User's private key is accessible (moth-pattern plaintext wallet.json)
-//
-// What this script DOES:
-//   - Connects to Cauldron's rostrum endpoint (rostrum.cauldron.quest:50004, protocol 1.4.3)
-//   - Queries pool UTXOs (via token.history or pool.list — currently empty)
-//   - Builds the swap tx via ExchangeLab SDK
-//   - Signs with libauth's compiler path (P2PKH, sighash 0x41 — Selene's pattern)
-//   - Dry-runs by default; BCH_CONFIRM=yes broadcasts
-//
-// What this script DOES NOT do yet:
-//   - Pool UTXO discovery (the rostrum returns empty even though it has pool.list)
-//   - LP operations (separate scripts/add-liquidity.mjs needed)
-//   - Multi-hop routing (only direct BCH ↔ token swaps)
+// A Cauldron pool input must be signed by the pool operator, so this wallet
+// cannot assemble a swap alone. The Router (Riften Labs, the DEX operator)
+// builds the unsigned transaction and names the inputs we own; we sign only
+// those and broadcast. See lib/router.mjs.
 
 import { connect, scripthashForAddress } from '../lib/network.mjs';
-import { connectCauldronRostrum, BCH_TOKEN } from '../lib/cauldron.mjs';
-import {
-  loadWallet,
-  loadHdNode,
-  deriveReceivingAddresses,
-  deriveChangeAddresses,
-  newChangeAddress,
-} from '../lib/wallet.mjs';
-import { signP2pkhTransaction } from '../lib/sign.mjs';
+import { loadWallet, loadHdNode, deriveReceivingAddresses, newChangeAddress, deriveChildPrivKey } from '../lib/wallet.mjs';
+import { addressToLockingBytecode, signExternalTransaction } from '../lib/sign.mjs';
+import { binToHex } from '../lib/hex.mjs';
+import { quote, buildSwap, verifyBuildAgainstQuote, broadcastSwap, resolveToken, bchToBaseUnits, toBaseUnits } from '../lib/router.mjs';
 
 function parseArgs() {
-  const args = process.argv.slice(2);
-  if (args.length < 3 || args.includes('--help') || args.includes('-h')) {
-    console.log('Usage: swap.mjs <supply_token> <demand_token> <amount>');
-    console.log('Example: swap.mjs BCH pusd 1000');
-    console.log('         swap.mjs pusd BCH 100');
+  const argv = process.argv.slice(2);
+  if (argv.length === 0 || argv.includes('--help') || argv.includes('-h')) {
+    console.log('Usage: swap.mjs <sell> <buy> <amount> [--quote-only] [--min-output N]');
+    console.log('Example: swap.mjs BCH pusd 0.01');
+    console.log('         swap.mjs pusd BCH 1.5');
     console.log('Set BCH_CONFIRM=yes to broadcast (dry-run otherwise).');
-    process.exit(args.length < 3 ? 1 : 0);
+    process.exit(argv.length === 0 ? 1 : 0);
   }
-  const [supply, demand, amountStr] = args;
-  const amount = BigInt(amountStr);
-  return { supply, demand, amount };
+  const quoteOnly = argv.includes('--quote-only');
+  const minIdx = argv.indexOf('--min-output');
+  const minOutput = minIdx !== -1 ? argv[minIdx + 1] : null;
+  // minIdx + 1 is 0 when the flag is absent, which would silently drop the
+  // first positional argument -- so the skip set is only built when the flag
+  // is actually present.
+  const skip = new Set(minIdx === -1 ? [] : [minIdx, minIdx + 1]);
+  const positional = argv.filter((a, i) => !a.startsWith('--') && !skip.has(i));
+  if (positional.length < 3) {
+    console.error('need <sell> <buy> <amount>');
+    process.exit(1);
+  }
+  return { sell: positional[0], buy: positional[1], amount: positional[2], quoteOnly, minOutput };
+}
+
+function displayAmount(baseUnits, decimals) {
+  if (decimals === null || decimals === undefined) return String(baseUnits);
+  const d = Number(decimals);
+  if (!Number.isFinite(d) || d === 0) return String(baseUnits);
+  const v = BigInt(baseUnits);
+  const div = 10n ** BigInt(d);
+  return `${v / div}.${(v % div).toString().padStart(d, '0')}`;
 }
 
 async function main() {
-  const { supply, demand, amount } = parseArgs();
-  if (supply === demand) {
-    console.error('supply and demand tokens cannot be the same');
+  const { sell: sellArg, buy: buyArg, amount: amountArg, quoteOnly, minOutput } = parseArgs();
+
+  const [sellTok, buyTok] = await Promise.all([resolveToken(sellArg), resolveToken(buyArg)]);
+  if (sellTok.categoryId === buyTok.categoryId) {
+    console.error('sell and buy must be different assets');
     process.exit(1);
   }
 
-  console.error(`swap: ${amount} ${supply} → ${demand}`);
+  // The router's protocol is integer base units throughout, so a user-facing
+  // amount has to be scaled by the asset's decimals. BCH is always 8; a token
+  // amount is scaled by whatever the indexer reports, and an unknown decimal
+  // count means we cannot safely guess a scale.
+  let amountBase;
+  if (sellTok.categoryId === 'bch') {
+    amountBase = bchToBaseUnits(amountArg);
+  } else if (sellTok.decimals === null || sellTok.decimals === undefined) {
+    throw new Error(
+      `decimals unknown for ${sellTok.symbol} -- pass the amount in base units with its category id`
+    );
+  } else {
+    amountBase = toBaseUnits(amountArg, Number(sellTok.decimals));
+  }
+  console.error(`swap: ${displayAmount(amountBase, sellTok.decimals)} ${sellTok.symbol} -> ${buyTok.symbol}`);
+
+  const q = await quote({
+    sell: sellTok.categoryId, buy: buyTok.categoryId, amount: amountBase, side: 'sell',
+  });
+  console.error(`[1/4] quote: ${displayAmount(q.outputAmount, buyTok.decimals)} ${buyTok.symbol} across ${q.poolCount} pool(s)`);
+  console.error(`      price ${q.priceBefore} -> ${q.priceAfter} after your trade`);
+
+  if (quoteOnly) {
+    console.log(JSON.stringify({
+      sell: sellTok.symbol, buy: buyTok.symbol,
+      amount_in: amountBase.toString(), expected_output: q.outputAmount,
+      pools: q.poolCount, price_before: q.priceBefore, price_after: q.priceAfter,
+      dry_run: true,
+    }, null, 2));
+    return;
+  }
 
   const w = loadWallet();
   if (!w) { console.error('no wallet; run create-wallet.mjs first'); process.exit(1); }
   const { hdNode } = loadHdNode();
   console.error(`network: ${w.network}`);
 
-  console.error('[1/5] connecting to Cauldron rostrum...');
-  const cauldronClient = await connectCauldronRostrum();
-
+  // The router needs our own spendable UTXOs to fund the trade, and the input
+  // asset must match the sell side: sending the wrong asset into a swap would
+  // hand the router a funding set it cannot use.
+  console.error('[2/4] collecting funding UTXOs...');
+  const addrs = deriveReceivingAddresses(20);
+  const byAddress = new Map(addrs.map((a) => [a.address, a]));
+  const client = await connect();
+  const funding = [];
   try {
-    console.error('[2/5] discovering pool UTXOs...');
-    // Try multiple discovery methods; Cauldron's rostrum has pool.list (empty per test)
-    let pools = [];
-    try {
-      const list = await cauldronClient.request('token.list');
-      pools = Object.values(list || {});
-      if (pools.length === 0) {
-        console.error('   pool.list returned empty — Cauldron has no active pools');
-        console.error('   (this matches the wiki note that Cauldron liquidity is thin)');
-        process.exit(2);
+    for (const a of addrs) {
+      const sh = scripthashForAddress(a.address);
+      const utxos = await client.request('blockchain.scripthash.listunspent', sh);
+      if (!Array.isArray(utxos)) continue;
+      for (const u of utxos) {
+        const isToken = !!u.token_data;
+        if (isToken) {
+          if (u.token_data?.category !== sellTok.categoryId) continue;
+        } else if (sellTok.categoryId !== 'bch') {
+          continue;
+        }
+        funding.push({
+          txid: u.tx_hash,
+          vout: u.tx_pos,
+          value: String(u.value),
+          scriptHex: binToHex(addressToLockingBytecode(a.address)),
+          token: isToken ? { category: sellTok.categoryId, amount: String(u.token_data.amount) } : null,
+          address: a.address,
+          index: a.index,
+        });
       }
-    } catch (e) {
-      console.error('   pool.list failed:', String(e).slice(0, 80));
-      process.exit(2);
     }
-
-    if (pools.length === 0) {
-      console.error('   no pools available. cannot build swap.');
-      process.exit(2);
-    }
-
-    // [3/5] build swap tx via ExchangeLab
-    // (this would use lib/cauldron.mjs::buildSwapTx — needs the SDK output shape wired)
-    console.error('[3/5] building swap tx (placeholder — see lib/cauldron.mjs::buildSwapTx)...');
-    console.error('   not yet fully wired. Phase 4 work.');
-    process.exit(2);
   } finally {
-    await cauldronClient.disconnect();
+    await client.disconnect();
   }
+
+  if (funding.length === 0) {
+    console.error(`no ${sellTok.symbol} UTXOs available to fund the swap`);
+    process.exit(2);
+  }
+  console.error(`      ${funding.length} UTXO(s) available`);
+
+  const receiveAddr = addrs[0].address;
+  const changeAddr = newChangeAddress().address;
+
+  console.error('[3/4] building the unsigned swap...');
+  const build = await buildSwap({
+    sell: sellTok.categoryId, buy: buyTok.categoryId, amount: amountBase, side: 'sell',
+    funding: funding.map(({ txid, vout, value, scriptHex, token }) =>
+      token ? { txid, vout, value, scriptHex, token } : { txid, vout, value, scriptHex }),
+    receiveAddr, changeAddr,
+    minOutput: minOutput || undefined,
+  });
+
+  // The router is documented as beta and says a quote must be checked against
+  // the built transaction. This is that check, and the last gate before a
+  // signature exists.
+  const gate = verifyBuildAgainstQuote(q, build, { minOutput: minOutput || undefined });
+  if (!gate.ok) {
+    console.error('REFUSING TO SIGN -- the built transaction does not match the quote:');
+    for (const p of gate.problems) console.error(`  - ${p}`);
+    process.exit(3);
+  }
+  console.error(`      verify: build matches quote (output ${build.expectedOutput})`);
+  console.error(`      router fee ${build.feeSats} sats, miner fee ${build.minerFeeSats} sats`);
+  console.error(`      we sign input(s) ${JSON.stringify(build.inputsToSign)}`);
+
+  // The router names which inputs are ours; the funding list is in the same
+  // order it was sent, so index into it rather than guessing from a txid.
+  const signed = await signExternalTransaction({
+    unsignedTxHex: build.unsignedTxHex,
+    inputsToSign: build.inputsToSign,
+    sourceOutputs: build.sourceOutputs,
+    inputMaterial: (index) => {
+      const utxo = funding[index];
+      if (!utxo) throw new Error(`no funding UTXO supplied for input ${index}`);
+      const derived = byAddress.get(utxo.address);
+      if (!derived) throw new Error(`no key derivable for input ${index}`);
+      return {
+        privateKey: deriveChildPrivKey(hdNode, 0, 0, derived.index),
+        valueSatoshis: BigInt(utxo.value),
+      };
+    },
+  });
+
+  const out = {
+    txid: signed.txid,
+    tx_hex: signed.txHex,
+    sell: sellTok.symbol,
+    buy: buyTok.symbol,
+    amount_in: amountBase.toString(),
+    amount_out: build.expectedOutput,
+    amount_out_display: displayAmount(build.expectedOutput, buyTok.decimals),
+    router_fee_sats: build.feeSats,
+    miner_fee_sats: build.minerFeeSats,
+    dry_run: true,
+  };
+
+  if (process.env.BCH_CONFIRM !== 'yes') {
+    console.error('DRY RUN -- set BCH_CONFIRM=yes to broadcast');
+    console.log(JSON.stringify(out, null, 2));
+    return;
+  }
+
+  console.error('[4/4] broadcasting...');
+  const { txid } = await broadcastSwap(signed.txHex);
+  console.log(JSON.stringify({ ...out, dry_run: false, broadcast: true, txid }, null, 2));
 }
 
 main().catch((e) => { console.error('error:', e.message); process.exit(1); });
