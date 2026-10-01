@@ -8,15 +8,12 @@
 // Strategy:
 //   - Scan all wallet addresses (receiving + change chains)
 //   - For each UTXO below SWEEP_THRESHOLD_SATS, mark as candidate
-//   - Also sweep token-bearing UTXOs whose value (in sats) is small (less than ~5000 sats)
-//     because each spends ~200-300 sats in fees when spent individually
 //   - Build a single tx that spends all candidates, pays 1 sat/byte, sends to a fresh change addr
 //   - Skip dust that would cost more in fees than it saves (the "sweep threshold" floor)
 //
 // Safety:
-//   - NEVER sweeps UTXOs that hold tokens whose value is hard to assess
-//   - Skips UTXOs that are themselves the tx fee budget (would cause negative balance)
-//   - BCH_CONFIRM=yes required for broadcast (moth pattern)
+//   - NEVER sweeps UTXOs that hold tokens: spending the UTXO consumes the token
+//     with it. Skipped token UTXOs are reported, and need send-token instead.
 
 import { connect, scripthashForAddress } from '../lib/network.mjs';
 import {
@@ -53,22 +50,28 @@ async function gatherAllUtxos(client) {
 }
 
 function selectSweepCandidates(utxos) {
-  // Sweep any BCH-only UTXO below threshold. Skip token UTXOs unless their sat
-  // value is also below threshold — token-bearing UTXOs need their own send-token flow.
+  // Sweep BCH-only UTXOs below threshold. NEVER sweep a token-bearing UTXO.
+  //
+  // This function used to include token UTXOs whose sat value was under 2000,
+  // with a comment saying "Sweep if user opts in (always sweep for now)". That
+  // discarded the token: spending the UTXO consumes the CashToken with it, and
+  // there is no output that preserves it. It also contradicted this file's own
+  // header, which promised "NEVER sweeps UTXOs that hold tokens whose value is
+  // hard to assess", and contradicted the script's other comment describing the
+  // threshold as roughly 5000 sats.
+  //
+  // A dust sweep is a fee optimisation. Destroying a token to save a few
+  // hundred sats is not an optimisation, and it is not reversible, so token
+  // UTXOs are excluded unconditionally. They need send-token's own flow.
   const candidates = [];
+  const skippedTokens = [];
   for (const u of utxos) {
     const value = BigInt(u.value);
-    if (value < SWEEP_THRESHOLD_SATS) {
-      if (!u.token_data) {
-        candidates.push(u);
-      } else if (value < 2000n) {
-        // token-bearing UTXOs under 2000 sats: probably not worth keeping as
-        // a separate UTXO. Sweep if user opts in (always sweep for now).
-        candidates.push(u);
-      }
-    }
+    if (value >= SWEEP_THRESHOLD_SATS) continue;
+    if (u.token_data) { skippedTokens.push(u); continue; }
+    candidates.push(u);
   }
-  return candidates;
+  return { candidates, skippedTokens };
 }
 
 function deriveChangeIndex(addr, recvAddrs, changeAddrs) {
@@ -104,7 +107,17 @@ async function main() {
     console.error(`   ${allUtxos.length} UTXO(s) total`);
 
     console.error('[2/4] selecting sweep candidates...');
-    const candidates = selectSweepCandidates(allUtxos);
+    const { candidates, skippedTokens } = selectSweepCandidates(allUtxos);
+    // Say so explicitly. A silently skipped token looks identical to a wallet
+    // that has none, which is the same under-reporting failure the /7/ chain
+    // has. If tokens are being skipped, the user should be told.
+    if (skippedTokens.length > 0) {
+      const totalTokenValue = skippedTokens.reduce((acc, u) => acc + BigInt(u.value), 0n);
+      console.error(
+        `   skipping ${skippedTokens.length} token-bearing UTXO(s) (${totalTokenValue} sat) -- ` +
+        'sweeping them would destroy the token. use send-token to consolidate those.'
+      );
+    }
     if (candidates.length === 0) {
       console.error('   no candidates below threshold. nothing to sweep.');
       return;
