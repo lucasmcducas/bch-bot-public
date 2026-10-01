@@ -10,6 +10,7 @@
 import { connect, scripthashForAddress } from '../lib/network.mjs';
 import { loadWallet, loadHdNode, deriveReceivingAddresses, newChangeAddress, deriveChangeAddresses } from '../lib/wallet.mjs';
 import { signP2pkhTransaction } from '../lib/sign.mjs';
+import { bchToBaseUnits, baseUnitsToBch } from '../lib/router.mjs';
 import { binToHex } from '../lib/hex.mjs';
 
 const FEE_RATE_SATS_PER_BYTE = 1.0; // conservative; mainnet often 1.0–2.0
@@ -53,12 +54,44 @@ async function findUtxosForAmount(client, wallet, hdNode, targetSats) {
 async function main() {
   const args = process.argv.slice(2);
   if (args.length < 2 || args.includes('--help') || args.includes('-h')) {
-    console.log(`Usage: send.mjs <recipient_address> <sats>`);
+    console.log(`Usage: send.mjs <recipient_address> <amount>`);
+    console.log(`  <amount> in BCH (e.g. 0.001), or in satoshis if it is a bare integer with no decimal point.`);
     console.log(`Set BCH_CONFIRM=yes to actually broadcast (dry-run otherwise).`);
     process.exit(args.length < 2 ? 1 : 0);
   }
-  const [recipient, satsArg] = args;
-  const targetSats = BigInt(satsArg);
+  const [recipient, amountArg] = args;
+  // The amount is a bare integer of satoshis, or a BCH amount with a decimal
+  // point. Accepting both is deliberate: a bare integer is unambiguous (there
+  // is no such thing as 0.5 sats), so existing callers keep working, and a
+  // decimal point can only mean BCH. It is not possible to express a
+  // sub-satoshi fraction of BCH, so there is no case where a decimal-point
+  // amount is ambiguous in the other direction.
+  let targetSats;
+  try {
+    // A bare integer means satoshis, and ONLY a bare integer. `BigInt` is far
+    // too permissive for an amount: it accepts 0x10 as 16, 0b101 as 5 and 1e3
+    // as 1000, so `0x10` would quietly send 16 sats to an amount nobody typed.
+    // Match the shape explicitly before converting.
+    if (/^\d+\.\d*$/.test(amountArg)) {
+      targetSats = bchToBaseUnits(amountArg);
+    } else if (/^\d+$/.test(amountArg)) {
+      targetSats = BigInt(amountArg);
+    } else {
+      throw new Error('unrecognised amount form');
+    }
+  } catch {
+    // Report every rejection the same way, and name the limit explicitly, so a
+    // user who typed 9 decimal places learns the cause instead of seeing a
+    // bare "Cannot convert to a BigInt".
+    console.error(
+      `invalid amount: ${amountArg} -- use BCH with at most 8 decimal places (e.g. 0.001), or an integer number of satoshis`
+    );
+    process.exit(1);
+  }
+  if (targetSats <= 0n) {
+    console.error(`amount must be greater than zero`);
+    process.exit(1);
+  }
 
   const w = loadWallet();
   if (!w) { console.error('no wallet; run create-wallet.mjs first'); process.exit(1); }

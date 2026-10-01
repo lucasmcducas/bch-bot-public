@@ -1,7 +1,7 @@
 {
   "name": "bch-bot",
   "version": "0.4.1",
-  "description": "BCH wallet bot — Node.js + libauth + public Rostrum/Electrum. Self-custodial BCH + CashTokens wallet.",
+  "description": "BCH wallet bot \u2014 Node.js + libauth + public Rostrum/Electrum. Self-custodial BCH + CashTokens wallet.",
   "type": "module",
   "main": "lib/wallet.mjs",
   "bin": {
@@ -20,7 +20,7 @@
     "add-liquidity": "node scripts/add-liquidity.mjs",
     "sweep": "node scripts/sweep.mjs",
     "history": "node scripts/history.mjs",
-    "test": "node scripts/test-tokens.mjs && node scripts/test-strategies.mjs && node scripts/test-pusd.mjs && node scripts/test-cauldron.mjs && node scripts/test-wallet-encryption.mjs && node scripts/test-router.mjs && node scripts/test-external-signing.mjs",
+    "test": "node scripts/test-tokens.mjs && node scripts/test-strategies.mjs && node scripts/test-pusd.mjs && node scripts/test-cauldron.mjs && node scripts/test-wallet-encryption.mjs && node scripts/test-router.mjs && node scripts/test-external-signing.mjs && node scripts/test-send-amount.mjs",
     "test:router": "node scripts/test-router.mjs",
     "test:signing": "node scripts/test-external-signing.mjs"
   },
