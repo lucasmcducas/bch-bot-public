@@ -31,16 +31,28 @@ import { quote, buildSwap, verifyBuildAgainstQuote, verifyTransactionOutputs, br
 // the ceiling is derived from what the build actually said rather than from a
 // hardcoded bps rate that could drift from the router. The ceiling is the
 // reported fee with generous headroom for the miner fee, doubled to allow for
-// a multi-output trade. If the build reports nothing usable, refuse to guess a
-// number and return null so the output check refuses the unknown output.
-function routerFeeCeiling(build, amountBase) {
-  const reported = build && build.feeSats !== undefined && build.feeSats !== null ? BigInt(build.feeSats) : null;
-  if (reported === null || reported <= 0n) return null;
+// a multi-output trade.
+//
+// This NEVER returns null. An earlier version returned null when the build
+// reported no usable fee, which made verifyTransactionOutputs skip the ceiling
+// check entirely and accept an unexplained output unexamined -- failing open on
+// exactly the case the check exists for. If the build gives us no fee to work
+// from, the honest response is a ceiling of zero: no unexplained output is
+// acceptable, and the caller's own build must then have no foreign outputs.
+//
+// A ceiling of zero is not merely safe, it is correct here: the receive and
+// change outputs are both ours, so a well-formed swap has no foreign output at
+// all. The headroom below only matters if the router ever starts paying itself
+// out of band.
+function routerFeeCeiling(build) {
+  const reported = build && build.feeSats !== undefined && build.feeSats !== null
+    ? BigInt(build.feeSats)
+    : null;
+  if (reported === null || reported <= 0n) return 0n;
   // A floor of 1000 sats covers the miner fee on a typical trade; the reported
-  // router fee is added on top, then doubled. This is a ceiling on an
-  // UNEXPLAINED output, not a fee we intend to pay, so erring high is safe --
-  // what it must never do is let a redirected OUTPUT through, and it cannot:
-  // a redirected output carries the whole traded amount, not a fee-sized sum.
+  // router fee is added on top, then doubled. Erring high is safe because a
+  // redirected output carries the whole traded amount, not a fee-sized sum, and
+  // is caught at every trade size.
   const minerAllowance = 1000n;
   return (reported + minerAllowance) * 2n;
 }
@@ -197,7 +209,7 @@ async function main() {
   const outputCheck = await verifyTransactionOutputs(build.unsignedTxHex, {
     expectedReceiveAddresses: [receiveAddr],
     changeAddresses: [changeAddr],
-    maxFeeSats: routerFeeCeiling(build, amountBase),
+    maxFeeSats: routerFeeCeiling(build),
   });
   if (!outputCheck.ok) {
     console.error('REFUSING TO SIGN -- the built transaction pays an address we do not control:');

@@ -201,5 +201,65 @@ await test('every output carries a numeric value', async () => {
   }
 });
 
+// --- 9. no ceiling means refuse, not skip ------------------------------------
+await test('REFUSES a foreign output when no fee ceiling is supplied', async () => {
+  // The fail-open case. Skipping the comparison when maxFeeSats is null means
+  // an unexplained output is accepted without ever being checked -- the wrong
+  // direction for a value-moving operation.
+  const hex = buildTx([
+    { lockingBytecode: lockFor(OUR_RECEIVE), valueSatoshis: 100000n },
+    { lockingBytecode: lockFor(OUR_CHANGE), valueSatoshis: 90000n },
+    { lockingBytecode: p2pkh(200), valueSatoshis: 300n },
+  ]);
+  const r = await refuses(
+    () => verifyTransactionOutputs(hex, {
+      expectedReceiveAddresses: [OUR_RECEIVE], changeAddresses: [OUR_CHANGE],
+      // maxFeeSats deliberately omitted.
+    }),
+    'foreign output with no ceiling'
+  );
+  ok(r.problems.some((p) => /no fee ceiling was supplied/.test(p)),
+    `expected a missing-ceiling problem, got: ${r.problems.join('; ')}`);
+});
+
+await test('REFUSES a foreign output when the ceiling is explicitly null', async () => {
+  const hex = buildTx([
+    { lockingBytecode: lockFor(OUR_RECEIVE), valueSatoshis: 100000n },
+    { lockingBytecode: p2pkh(200), valueSatoshis: 300n },
+  ]);
+  const r = await refuses(
+    () => verifyTransactionOutputs(hex, {
+      expectedReceiveAddresses: [OUR_RECEIVE], changeAddresses: [], maxFeeSats: null,
+    }),
+    'explicitly null ceiling'
+  );
+  ok(r.problems.some((p) => /no fee ceiling was supplied/.test(p)),
+    `expected a missing-ceiling problem, got: ${r.problems.join('; ')}`);
+});
+
+await test('a zero ceiling accepts only a transaction with no foreign outputs', async () => {
+  const clean = buildTx([
+    { lockingBytecode: lockFor(OUR_RECEIVE), valueSatoshis: 100000n },
+    { lockingBytecode: lockFor(OUR_CHANGE), valueSatoshis: 90000n },
+  ]);
+  const okResult = await verifyTransactionOutputs(clean, {
+    expectedReceiveAddresses: [OUR_RECEIVE], changeAddresses: [OUR_CHANGE], maxFeeSats: 0n,
+  });
+  ok(okResult.ok, `expected ok with no foreign outputs, got: ${okResult.problems.join('; ')}`);
+
+  const withFee = buildTx([
+    { lockingBytecode: lockFor(OUR_RECEIVE), valueSatoshis: 100000n },
+    { lockingBytecode: p2pkh(200), valueSatoshis: 300n },
+  ]);
+  const r = await refuses(
+    () => verifyTransactionOutputs(withFee, {
+      expectedReceiveAddresses: [OUR_RECEIVE], changeAddresses: [], maxFeeSats: 0n,
+    }),
+    'zero ceiling with a fee output'
+  );
+  ok(r.problems.some((p) => /exceeds the fee ceiling of 0/.test(p)),
+    `expected a ceiling problem, got: ${r.problems.join('; ')}`);
+});
+
 console.log(`\nRESULT: ${passed} passed, ${failed} failed (${passed + failed} total)`);
 process.exit(failed > 0 ? 1 : 0);

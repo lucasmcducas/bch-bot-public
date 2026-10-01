@@ -20,7 +20,7 @@
     "add-liquidity": "node scripts/add-liquidity.mjs",
     "sweep": "node scripts/sweep.mjs",
     "history": "node scripts/history.mjs",
-    "test": "node scripts/test-tokens.mjs && node scripts/test-strategies.mjs && node scripts/test-pusd.mjs && node scripts/test-cauldron.mjs && node scripts/test-wallet-encryption.mjs && node scripts/test-router.mjs && node scripts/test-external-signing.mjs && node scripts/test-send-amount.mjs && node scripts/test-swap-outputs.mjs && node scripts/test-wallet.mjs && node scripts/test-pusd-fingerprints.mjs && node scripts/test-sweep-selection.mjs && node scripts/test-signer-binding.mjs",
+    "test": "node scripts/test-tokens.mjs && node scripts/test-strategies.mjs && node scripts/test-pusd.mjs && node scripts/test-cauldron.mjs && node scripts/test-wallet-encryption.mjs && node scripts/test-router.mjs && node scripts/test-external-signing.mjs && node scripts/test-send-amount.mjs && node scripts/test-swap-outputs.mjs && node scripts/test-wallet.mjs && node scripts/test-pusd-fingerprints.mjs && node scripts/test-sweep-selection.mjs && node scripts/test-signer-binding.mjs && node scripts/test-network.mjs",
     "test:router": "node scripts/test-router.mjs",
     "test:signing": "node scripts/test-external-signing.mjs"
   },
