@@ -17,6 +17,7 @@ import {
   deriveChangeAddresses,
 } from '../lib/wallet.mjs';
 import { sumFtBalances } from '../lib/tokens.mjs';
+import { describeToken } from '../lib/token-registry.mjs';
 
 const RECEIVING_GAP = 20;
 const CHANGE_GAP = 20;
@@ -100,8 +101,14 @@ async function main() {
     if (ftSums.size > 0) {
       const sortedCats = [...ftSums.entries()].sort((a, b) => Number(b[1] - a[1]));
       for (const [cat, amt] of sortedCats) {
+        // Carry the symbol, the decimals, and a display string alongside the raw
+        // base units. A UI cannot turn 100 base units into "1 ROACH" on its
+        // own -- CashTokens base units carry no decimal metadata, so the
+        // decimals have to come from the wallet or the user sees a raw integer.
+        // `amount` stays the exact base-unit figure, because that is what a
+        // signer must use and a display string must never be parsed back.
         tokensBlock[cat] = {
-          amount: amt.toString(),
+          ...describeToken(cat, amt),
           short_id: cat.slice(0, 16) + '…',
         };
       }
