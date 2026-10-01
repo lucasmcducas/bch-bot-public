@@ -23,7 +23,27 @@ import { connect, scripthashForAddress } from '../lib/network.mjs';
 import { loadWallet, loadHdNode, deriveReceivingAddresses, newChangeAddress, deriveChildPrivKey } from '../lib/wallet.mjs';
 import { addressToLockingBytecode, signExternalTransaction } from '../lib/sign.mjs';
 import { binToHex } from '../lib/hex.mjs';
-import { quote, buildSwap, verifyBuildAgainstQuote, broadcastSwap, resolveToken, bchToBaseUnits, toBaseUnits } from '../lib/router.mjs';
+import { quote, buildSwap, verifyBuildAgainstQuote, verifyTransactionOutputs, broadcastSwap, resolveToken, bchToBaseUnits, toBaseUnits } from '../lib/router.mjs';
+
+// The largest "output to an address we do not control" we are willing to accept.
+//
+// The router charges its fee on the build, and reports it as build.feeSats, so
+// the ceiling is derived from what the build actually said rather than from a
+// hardcoded bps rate that could drift from the router. The ceiling is the
+// reported fee with generous headroom for the miner fee, doubled to allow for
+// a multi-output trade. If the build reports nothing usable, refuse to guess a
+// number and return null so the output check refuses the unknown output.
+function routerFeeCeiling(build, amountBase) {
+  const reported = build && build.feeSats !== undefined && build.feeSats !== null ? BigInt(build.feeSats) : null;
+  if (reported === null || reported <= 0n) return null;
+  // A floor of 1000 sats covers the miner fee on a typical trade; the reported
+  // router fee is added on top, then doubled. This is a ceiling on an
+  // UNEXPLAINED output, not a fee we intend to pay, so erring high is safe --
+  // what it must never do is let a redirected OUTPUT through, and it cannot:
+  // a redirected output carries the whole traded amount, not a fee-sized sum.
+  const minerAllowance = 1000n;
+  return (reported + minerAllowance) * 2n;
+}
 
 function parseArgs() {
   const argv = process.argv.slice(2);
@@ -167,6 +187,28 @@ async function main() {
     process.exit(3);
   }
   console.error(`      verify: build matches quote (output ${build.expectedOutput})`);
+
+  // The comparison above checks two numbers the ROUTER supplied, so a
+  // compromised router could satisfy it while redirecting the output. Read the
+  // transaction bytes that would actually be signed and confirm every output
+  // goes to an address we control, or is a small plain output we account for as
+  // fee. A token-aware output is never accepted as a fee: that is an asset
+  // leaving the wallet, not satoshis.
+  const outputCheck = await verifyTransactionOutputs(build.unsignedTxHex, {
+    expectedReceiveAddresses: [receiveAddr],
+    changeAddresses: [changeAddr],
+    maxFeeSats: routerFeeCeiling(build, amountBase),
+  });
+  if (!outputCheck.ok) {
+    console.error('REFUSING TO SIGN -- the built transaction pays an address we do not control:');
+    for (const p of outputCheck.problems) console.error(`  - ${p}`);
+    process.exit(3);
+  }
+  console.error(
+    `      verify: ${outputCheck.outputs.filter((o) => o.isOurs).length}/${outputCheck.outputs.length} outputs are ours` +
+    ` (amount ${build.expectedOutput})`
+  );
+
   console.error(`      router fee ${build.feeSats} sats, miner fee ${build.minerFeeSats} sats`);
   console.error(`      we sign input(s) ${JSON.stringify(build.inputsToSign)}`);
 
