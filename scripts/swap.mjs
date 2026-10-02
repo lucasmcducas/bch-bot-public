@@ -20,7 +20,7 @@
 // those and broadcast. See lib/router.mjs.
 
 import { connect, scripthashForAddress } from '../lib/network.mjs';
-import { loadWallet, loadHdNode, deriveReceivingAddresses, deriveChangeAddresses, newChangeAddress, deriveChildPrivKey } from '../lib/wallet.mjs';
+import { loadWallet, loadHdNode, loadState, deriveReceivingAddresses, deriveChangeAddresses, newChangeAddress, deriveChildPrivKey } from '../lib/wallet.mjs';
 import { addressToLockingBytecode, signExternalTransaction } from '../lib/sign.mjs';
 import { binToHex } from '../lib/hex.mjs';
 import { quote, buildSwap, verifyBuildAgainstQuote, verifyTransactionOutputs, broadcastViaElectrum, broadcastSwap, resolveToken, bchToBaseUnits, toBaseUnits } from '../lib/router.mjs';
@@ -187,7 +187,15 @@ async function main() {
   console.error(`      ${funding.length} UTXO(s) available`);
 
   const receiveAddr = addrs[0].address;
-  const changeAddr = newChangeAddress().address;
+  // A dry run must not advance wallet state. newChangeAddress() derives the
+  // current change index, increments it, and writes state.json -- calling it
+  // here burned a change address on every dry run (observed: 10 -> 33 across
+  // ~23 runs). Derive the same address WITHOUT consuming it, and only move
+  // change_index when a broadcast is actually confirmed.
+  const isBroadcast = process.env.BCH_CONFIRM === 'yes';
+  const changeAddr = isBroadcast
+    ? newChangeAddress().address
+    : deriveChangeAddresses(loadState().change_index + 1).at(-1).address;
 
   console.error('[3/4] building the unsigned swap...');
   const build = await buildSwap({

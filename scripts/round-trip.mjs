@@ -46,7 +46,15 @@ async function main() {
   try {
     // Step 1: gather confirmed UTXOs from receiving chain
     console.log(`[2/6] scanning first 20 receiving addresses for UTXOs...`);
-    const addrs = deriveReceivingAddresses(20);
+    // Scan BOTH chains. Change addresses hold real money -- this wallet's own
+  // `send` writes change there -- so a receiving-only scan understates
+  // spendable funds and can report "insufficient funds" with a large balance
+  // sitting unused. Tag each entry with its chain so callers can still tell
+  // them apart.
+  const addrs = [
+    ...deriveReceivingAddresses(20).map((a) => ({ ...a, chain: 'recv' })),
+    ...deriveChangeAddresses(20).map((a) => ({ ...a, chain: 'change' })),
+  ];
     const allUtxos = [];
     for (const a of addrs) {
       const sh = scripthashForAddress(a.address);
