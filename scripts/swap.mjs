@@ -20,7 +20,7 @@
 // those and broadcast. See lib/router.mjs.
 
 import { connect, scripthashForAddress } from '../lib/network.mjs';
-import { loadWallet, loadHdNode, deriveReceivingAddresses, newChangeAddress, deriveChildPrivKey } from '../lib/wallet.mjs';
+import { loadWallet, loadHdNode, deriveReceivingAddresses, deriveChangeAddresses, newChangeAddress, deriveChildPrivKey } from '../lib/wallet.mjs';
 import { addressToLockingBytecode, signExternalTransaction } from '../lib/sign.mjs';
 import { binToHex } from '../lib/hex.mjs';
 import { quote, buildSwap, verifyBuildAgainstQuote, verifyTransactionOutputs, broadcastViaElectrum, broadcastSwap, resolveToken, bchToBaseUnits, toBaseUnits } from '../lib/router.mjs';
@@ -140,7 +140,15 @@ async function main() {
   // asset must match the sell side: sending the wrong asset into a swap would
   // hand the router a funding set it cannot use.
   console.error('[2/4] collecting funding UTXOs...');
-  const addrs = deriveReceivingAddresses(20);
+  // Scan change addresses too, not just receiving ones. Change is money this
+  // wallet sent itself and got back; leaving it out under-reports the spendable
+  // balance. On this wallet 856,855 of 1,657,855 sat sat on a change address,
+  // so a receiving-only scan could only ever offer 801,000 sat. balance.mjs and
+  // sweep.mjs already scan both; this keeps the three consistent.
+  const addrs = [
+    ...deriveReceivingAddresses(20).map((a) => ({ ...a, chain: 'recv' })),
+    ...deriveChangeAddresses(20).map((a) => ({ ...a, chain: 'change' })),
+  ];
   const byAddress = new Map(addrs.map((a) => [a.address, a]));
   const client = await connect(w.network);
   const funding = [];
@@ -164,6 +172,7 @@ async function main() {
           token: isToken ? { category: sellTok.categoryId, amount: String(u.token_data.amount) } : null,
           address: a.address,
           index: a.index,
+          chain: a.chain,
         });
       }
     }
@@ -274,6 +283,85 @@ async function main() {
       process.exit(3);
     }
     fundingForInput.set(index, match);
+  }
+
+  // The pool covenant inputs are the router's, not ours, and they are the ones
+  // that go stale: a competing swap spends the same pool outputs, and ABC then
+  // rejects the whole transaction with "Missing inputs" -- an error that reads
+  // like a malformed transaction rather than a spent input. ABC raises that
+  // only from HaveCoin/HaveInputs, so an unspent-output check is exactly the
+  // right test. Check before signing: after signing we have spent a signature
+  // and a fee to learn the route was stale.
+  {
+    const checkClient = await connect(w.network);
+    const stale = [];
+    try {
+      for (let i = 0; i < builtInputs.length; i++) {
+        if (fundingForInput.has(i)) continue;          // ours; already verified above
+        // libauth's outpointTransactionHash is stored LITTLE-ENDIAN (wire
+        // order), so the raw bytes ARE the on-chain order. Electrum's
+        // tx_hash is the big-endian display form -- the reverse. The router
+        // names the parent in wire order, so send the bytes as they are and
+        // only fall back to the reversed form. Doing it the other way round
+        // looks up a txid that does not exist and reports a healthy route as
+        // "parent unknown".
+        const wireOrder = Buffer.from(builtInputs[i].outpointTransactionHash).toString('hex');
+        const displayOrder = Buffer.from(builtInputs[i].outpointTransactionHash).reverse().toString('hex');
+        const vout = Number(builtInputs[i].outpointIndex);
+        let parent = null;
+        let raw = null;
+        for (const candidate of [wireOrder, displayOrder]) {
+          parent = await checkClient.request('blockchain.transaction.get', [candidate, false])
+            .catch(() => null);
+          if (typeof parent === 'string') { raw = candidate; break; }
+        }
+        if (typeof parent !== 'string') { stale.push({ i, raw: wireOrder, vout, why: 'parent unknown' }); continue; }
+        // Walk the parent to its output, then ask the node whether that output
+        // is still in the UTXO set via its scripthash.
+        const { createHash } = await import('node:crypto');
+        const bytes = Buffer.from(parent, 'hex');
+        let off = 4;
+        const nIn = bytes[off]; off += 1;
+        for (let k = 0; k < nIn; k++) { off += 36; const sl = bytes[off]; off += 1 + sl + 4; }
+        const nOut = bytes[off]; off += 1;
+        const locks = [];
+        for (let k = 0; k < nOut; k++) {
+          off += 8;
+          const sl = bytes[off]; off += 1;
+          locks.push(bytes.subarray(off, off + sl));
+          off += sl;
+        }
+        const lock = locks[vout];
+        if (!lock) { stale.push({ i, raw, vout, why: 'no such output' }); continue; }
+        const sh = createHash('sha256').update(lock).digest().reverse().toString('hex');
+        const unspent = await checkClient.request('blockchain.scripthash.listunspent', sh)
+          .catch(() => null);
+        if (Array.isArray(unspent) && unspent.length === 0) {
+          stale.push({ i, raw, vout, why: 'already spent' });
+        }
+      }
+    } finally {
+      await checkClient.disconnect();
+    }
+    if (stale.length === builtInputs.length - fundingForInput.size) {
+      // Every pool input failed to read. That is a transport problem (this node
+      // answered {} to every blockchain.transaction.get during the check), not
+      // evidence that the pools are spent. Say so, and let the caller proceed to
+      // a broadcast, which is the authority.
+      console.error('      note: could not read the router\'s pool inputs from this node;');
+      console.error('            continuing so the broadcast can confirm or refute them.');
+    } else if (stale.length) {
+      console.error(`REFUSING TO SIGN -- ${stale.length} of the router's pool inputs are no longer spendable:`);
+      for (const x of stale.slice(0, 5)) {
+        console.error(`  - input ${x.i} spends ${x.raw.slice(0, 16)}...:${x.vout} (${x.why})`);
+      }
+      if (stale.length > 5) console.error(`  ... and ${stale.length - 5} more`);
+      console.error('');
+      console.error('The router served pool state that a competing swap has already');
+      console.error('consumed. This is the normal condition on a busy pool, not a');
+      console.error('malformed transaction: retry to be quoted against fresh pools.');
+      process.exit(4);
+    }
   }
 
   // The router names which inputs are ours; each must be one we funded. Keyed by
