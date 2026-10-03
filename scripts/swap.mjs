@@ -19,7 +19,8 @@
 // builds the unsigned transaction and names the inputs we own; we sign only
 // those and broadcast. See lib/router.mjs.
 
-import { connect, scripthashForAddress } from '../lib/network.mjs';
+import { connect, scripthashForAddress, listUnspent,
+} from '../lib/network.mjs';
 import { loadWallet, loadHdNode, loadState, deriveReceivingAddresses, deriveChangeAddresses, newChangeAddress, deriveChildPrivKey } from '../lib/wallet.mjs';
 import { addressToLockingBytecode, signExternalTransaction } from '../lib/sign.mjs';
 import { binToHex } from '../lib/hex.mjs';
@@ -155,7 +156,7 @@ async function main() {
   try {
     for (const a of addrs) {
       const sh = scripthashForAddress(a.address);
-      const utxos = await client.request('blockchain.scripthash.listunspent', sh);
+      const utxos = await listUnspent(client, sh);
       if (!Array.isArray(utxos)) continue;
       for (const u of utxos) {
         const isToken = !!u.token_data;

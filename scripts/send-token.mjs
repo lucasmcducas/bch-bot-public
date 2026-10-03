@@ -11,7 +11,8 @@
 // Pattern from Selene Wallet TransactionBuilderService.buildP2pkhTransaction
 // (gitlab.com/selene.cash/selene-wallet) + Moth's CLI script shape.
 
-import { connect, scripthashForAddress } from '../lib/network.mjs';
+import { connect, scripthashForAddress, listUnspent,
+} from '../lib/network.mjs';
 import {
   loadWallet,
   loadHdNode,
@@ -27,6 +28,8 @@ import {
   sumFtBalances,
   selectInputsForTokenSend,
 } from '../lib/tokens.mjs'
+import { toBaseUnits } from '../lib/router.mjs';
+import { tokenMeta, DEFAULT_DECIMALS } from '../lib/token-registry.mjs';
 
 const FEE_RATE_SATS_PER_BYTE = 1.0;
 const DUST_THRESHOLD = 546n;
@@ -56,7 +59,7 @@ async function gatherAllUtxos(client, wallet) {
   const all = [];
   for (const a of addrs) {
     const sh = scripthashForAddress(a.address);
-    const utxos = await client.request('blockchain.scripthash.listunspent', sh);
+    const utxos = await listUnspent(client, sh);
     if (Array.isArray(utxos)) {
       for (const u of utxos) all.push({ address: a.address, ...u });
     }
@@ -93,7 +96,7 @@ async function main() {
     const changeUtxos = [];
     for (const a of deriveChangeAddresses(20)) {
       const sh = scripthashForAddress(a.address);
-      const utxos = await client.request('blockchain.scripthash.listunspent', sh);
+      const utxos = await listUnspent(client, sh);
       if (Array.isArray(utxos)) {
         for (const u of utxos) changeUtxos.push({ address: a.address, ...u });
       }
@@ -115,6 +118,27 @@ async function main() {
     }
 
     // Build the recipient output
+    // Parse the amount ONCE, in base units, and reuse it. Three separate sites
+    // used to call BigInt(opts.amount) on the raw string, so a display amount like
+    // "0.10" threw at whichever site ran first -- and the other two would have
+    // thrown the same way even after the first was fixed. One parse, one
+    // variable, so the three cannot disagree.
+    const requestedAmount = (() => {
+      if (opts.isNft) return 1n;
+      const decimals = tokenMeta(opts.category?.toLowerCase())?.decimals ?? DEFAULT_DECIMALS;
+      try {
+        const v = /^\d+$/.test(opts.amount)
+          ? BigInt(opts.amount)
+          : toBaseUnits(opts.amount, decimals);
+        if (v <= 0n) throw new Error('not positive');
+        return v;
+      } catch {
+        console.error(
+          `invalid amount: ${opts.amount} -- use a display amount with at most ${decimals} decimal places (e.g. 0.1), or a whole number of base units`
+        );
+        process.exit(1);
+      }
+    })();
     let recipientTokenOutput;
     if (opts.isNft) {
       console.error(`[3/7] building NFT output (category ${targetCat.slice(0, 16)}..., commitment ${opts.commitment.slice(0, 16)}...)`);
@@ -125,8 +149,15 @@ async function main() {
         commitment: opts.commitment,
       });
     } else {
-      const amtBig = BigInt(opts.amount);
-      console.error(`[3/7] building FT output (category ${targetCat.slice(0, 16)}..., amount ${amtBig.toString()})`);
+      const amtBig = requestedAmount;
+      const decimals = tokenMeta(targetCat)?.decimals ?? DEFAULT_DECIMALS;
+      if (amtBig > haveTarget) {
+        console.error(
+          `insufficient ${targetCat.slice(0, 8)}...: have ${haveTarget} base units, need ${amtBig}`
+        );
+        process.exit(1);
+      }
+      console.error(`[3/7] building FT output (category ${targetCat.slice(0, 16)}..., amount ${amtBig} base units = ${opts.amount} at ${decimals} decimals)`);
       recipientTokenOutput = createTokenOutput({
         address: opts.recipient,
         category: targetCat,
@@ -142,16 +173,23 @@ async function main() {
     const { inputs: rawInputs, ftTotal, bchTotal } = selectInputsForTokenSend({
       allUtxos,
       category: targetCat,
-      tokenAmount: opts.isNft ? 1n : BigInt(opts.amount),
+      tokenAmount: requestedAmount,
       bchRequired: bchForFee,
     });
-    console.error(`   ${rawInputs.length} input(s): FT sum=${ftTotal}, BCH sum=${bchTotal}`);
+    // The sat value carried by the FT inputs. selectInputsForTokenSend returns
+    // the token totals but not the sat totals, and those sats have to leave the
+    // output set via the token outputs -- otherwise the change calculation
+    // overpays by exactly the sat value of the FT inputs.
+    const ftSatsIn = rawInputs
+      .filter((u) => u.token_data)
+      .reduce((acc, u) => acc + BigInt(u.value ?? 0), 0n);
+    console.error(`   ${rawInputs.length} input(s): FT sum=${ftTotal} (${ftSatsIn} sats), BCH sum=${bchTotal}`);
 
     // Build all outputs: [recipient FT/NFT, change-FT (if any excess), BCH change]
     const outputs = [recipientTokenOutput];
 
     // FT change: if we over-selected FT inputs, send excess back to a change address
-    const excessFt = ftTotal - (opts.isNft ? 1n : BigInt(opts.amount));
+    const excessFt = ftTotal - requestedAmount;
     if (excessFt > 0n) {
       const ftChangeAddr = newChangeAddress();
       const ftChange = createTokenOutput({
@@ -164,10 +202,32 @@ async function main() {
       console.error(`   FT change: ${excessFt} -> ${ftChangeAddr.address}`);
     }
 
-    // BCH change estimate (libauth will compute actual via fee in signP2pkhTransaction)
+    // BCH change: everything not claimed by an output, minus the fee.
+    //
+    // The FT inputs carry sats as well as tokens, and BOTH token outputs claim
+    // sats: the recipient FT output and the FT change output, each raised to the
+    // dust floor by createTokenOutput. Subtracting only the fee made the outputs
+    // exceed the inputs -- a NEGATIVE fee of -456 sat -- and the node rejects
+    // that. So subtract the real sat value of every output built so far, not a
+    // fee estimate alone.
+    const tokenOutputSats = outputs.reduce(
+      (acc, o) => acc + BigInt(o.valueSatoshis ?? 0),
+      0n,
+    );
     const estSize = 10 + rawInputs.length * 200 + outputs.length * 50 + 34; // token outputs are larger
     const estFee = BigInt(Math.ceil(estSize * FEE_RATE_SATS_PER_BYTE));
-    const bchChange = bchTotal - estFee;
+    const bchChange = bchTotal + ftSatsIn - tokenOutputSats - estFee;
+    // The fee is implicit (signP2pkhTransaction computes it as inputs - outputs),
+    // so a wrong change amount does not fail loudly -- it produces a fee of
+    // zero, a negative fee, or a fee under the node's minimum, and the node
+    // rejects it with no useful context. Refuse to sign instead.
+    if (bchChange < 0n) {
+      console.error(
+        `ABORT: outputs exceed available sats by ${-bchChange} sat ` +
+        `(BCH in ${bchTotal}, FT in ${ftSatsIn}, token outputs ${tokenOutputSats}, fee ${estFee})`,
+      );
+      process.exit(1);
+    }
     if (bchChange >= DUST_THRESHOLD) {
       const bchChangeAddr = newChangeAddress();
       outputs.push({

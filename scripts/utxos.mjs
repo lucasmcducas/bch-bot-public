@@ -3,7 +3,8 @@
 //
 // Usage: node scripts/utxos.mjs [--network chipnet|mainnet]
 
-import { connect, scripthashForAddress } from '../lib/network.mjs';
+import { connect, scripthashForAddress, listUnspent,
+} from '../lib/network.mjs';
 import { loadWallet, deriveReceivingAddresses,
   deriveChangeAddresses } from '../lib/wallet.mjs';
 
@@ -26,7 +27,7 @@ async function main() {
     const allUtxos = [];
     for (const a of addrs) {
       const sh = scripthashForAddress(a.address);
-      const utxos = await client.request('blockchain.scripthash.listunspent', sh);
+      const utxos = await listUnspent(client, sh);
       if (Array.isArray(utxos)) {
         for (const u of utxos) {
           allUtxos.push({ address: a.address, ...u });

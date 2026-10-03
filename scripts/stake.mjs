@@ -28,7 +28,8 @@
 //   - Prints dry-run JSON with tx_hash, tx_hex, fee
 //   - With BCH_CONFIRM=yes, broadcasts via blockchain.transaction.broadcast
 
-import { scripthashForAddress } from '../lib/network.mjs'
+import { scripthashForAddress, listUnspent,
+} from '../lib/network.mjs'
 import {
   loadWallet,
 } from '../lib/wallet.mjs'
@@ -62,7 +63,7 @@ async function findPoolInputs(client, addrs) {
   const found = { pool: null, sidecar: null, addLiquidity: null, userPusd: null };
   for (const a of addrs) {
     const sh = scripthashForAddress(a.address);
-    const utxos = await client.request('blockchain.scripthash.listunspent', sh);
+    const utxos = await listUnspent(client, sh);
     if (!Array.isArray(utxos)) continue;
     for (const u of utxos) {
       if (u.height === 0) continue;  // skip unconfirmed; we need confirmed covenant state

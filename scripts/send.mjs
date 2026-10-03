@@ -7,7 +7,8 @@
 // SAFETY: broadcasts a real transaction on mainnet if wallet is mainnet.
 //   Set BCH_CONFIRM=yes env var to actually broadcast (moth convention).
 
-import { connect, scripthashForAddress } from '../lib/network.mjs';
+import { connect, scripthashForAddress, listUnspent,
+} from '../lib/network.mjs';
 import { loadWallet, loadHdNode, resolveAddressPath, newChangeAddress } from '../lib/wallet.mjs';
 import { signP2pkhTransaction } from '../lib/sign.mjs';
 import { bchToBaseUnits } from '../lib/router.mjs'
@@ -29,7 +30,7 @@ async function findUtxosForAmount(client, wallet, hdNode, targetSats) {
   const candidates = [];
   for (const a of addrs) {
     const sh = scripthashForAddress(a.address);
-    const utxos = await client.request('blockchain.scripthash.listunspent', sh);
+    const utxos = await listUnspent(client, sh);
     if (Array.isArray(utxos)) {
       for (const u of utxos) {
         candidates.push({

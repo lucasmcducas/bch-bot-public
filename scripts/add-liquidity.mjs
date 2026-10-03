@@ -27,7 +27,8 @@
 //      (BCH + token) and constructs pool output with combined reserves.
 //      NOT YET IMPLEMENTED — Phase 4 follow-up.
 
-import { connect, scripthashForAddress } from '../lib/network.mjs';
+import { connect, scripthashForAddress, listUnspent,
+} from '../lib/network.mjs';
 import { connectCauldronRostrum, fetchPools } from '../lib/cauldron.mjs';
 import {
   loadWallet,
@@ -70,14 +71,14 @@ async function gatherBchInputs(client, needed_sats) {
   const allUtxos = [];
   for (const a of deriveReceivingAddresses(20)) {
     const sh = scripthashForAddress(a.address);
-    const utxos = await client.request('blockchain.scripthash.listunspent', sh);
+    const utxos = await listUnspent(client, sh);
     if (Array.isArray(utxos)) {
       for (const u of utxos) if (!u.token_data && u.height > 0) allUtxos.push({ address: a.address, chain: 'recv', ...u });
     }
   }
   for (const a of deriveChangeAddresses(20)) {
     const sh = scripthashForAddress(a.address);
-    const utxos = await client.request('blockchain.scripthash.listunspent', sh);
+    const utxos = await listUnspent(client, sh);
     if (Array.isArray(utxos)) {
       for (const u of utxos) if (!u.token_data && u.height > 0) allUtxos.push({ address: a.address, chain: 'change', ...u });
     }
@@ -98,7 +99,7 @@ async function gatherTokenInputs(client, token_id, needed_amount) {
   const allUtxos = [];
   for (const a of deriveReceivingAddresses(20)) {
     const sh = scripthashForAddress(a.address);
-    const utxos = await client.request('blockchain.scripthash.listunspent', sh);
+    const utxos = await listUnspent(client, sh);
     if (Array.isArray(utxos)) {
       for (const u of utxos) {
         if (u.token_data?.category === token_id && u.height > 0 && !u.token_data?.nft) {
@@ -109,7 +110,7 @@ async function gatherTokenInputs(client, token_id, needed_amount) {
   }
   for (const a of deriveChangeAddresses(20)) {
     const sh = scripthashForAddress(a.address);
-    const utxos = await client.request('blockchain.scripthash.listunspent', sh);
+    const utxos = await listUnspent(client, sh);
     if (Array.isArray(utxos)) {
       for (const u of utxos) {
         if (u.token_data?.category === token_id && u.height > 0 && !u.token_data?.nft) {

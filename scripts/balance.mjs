@@ -10,7 +10,8 @@
 // Walks both receiving (m/44'/145'/0'/0/i) and change (m/44'/145'/0'/1/i) chains.
 // Token summary groups by category id and prints sorted by total FT amount.
 
-import { connect, scripthashForAddress } from '../lib/network.mjs';
+import { connect, scripthashForAddress, listUnspent,
+} from '../lib/network.mjs';
 import {
   loadWallet,
   deriveReceivingAddresses,
@@ -46,7 +47,7 @@ async function queryChain(client, addrs, opts) {
     if (typeof bal === 'string') continue;
     confirmed += BigInt(bal.confirmed ?? 0);
     unconfirmed += BigInt(bal.unconfirmed ?? 0);
-    const utxos = await client.request('blockchain.scripthash.listunspent', sh);
+    const utxos = await listUnspent(client, sh);
     if (Array.isArray(utxos)) {
       for (const u of utxos) {
         allUtxos.push({ address: a.address, ...u });

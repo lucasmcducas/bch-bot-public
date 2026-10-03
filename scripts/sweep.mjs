@@ -15,7 +15,8 @@
 //   - NEVER sweeps UTXOs that hold tokens: spending the UTXO consumes the token
 //     with it. Skipped token UTXOs are reported, and need send-token instead.
 
-import { connect, scripthashForAddress } from '../lib/network.mjs';
+import { connect, scripthashForAddress, listUnspent,
+} from '../lib/network.mjs';
 import {
   loadWallet,
   loadHdNode,
@@ -33,14 +34,14 @@ async function gatherAllUtxos(client) {
   const all = [];
   for (const a of deriveReceivingAddresses(20)) {
     const sh = scripthashForAddress(a.address);
-    const utxos = await client.request('blockchain.scripthash.listunspent', sh);
+    const utxos = await listUnspent(client, sh);
     if (Array.isArray(utxos)) {
       for (const u of utxos) all.push({ address: a.address, chain: 'recv', ...u });
     }
   }
   for (const a of deriveChangeAddresses(20)) {
     const sh = scripthashForAddress(a.address);
-    const utxos = await client.request('blockchain.scripthash.listunspent', sh);
+    const utxos = await listUnspent(client, sh);
     if (Array.isArray(utxos)) {
       for (const u of utxos) all.push({ address: a.address, chain: 'change', ...u });
     }
