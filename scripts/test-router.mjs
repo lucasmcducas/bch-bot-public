@@ -1,5 +1,9 @@
 #!/usr/bin/env node
-// scripts/test-router.mjs — behavioral tests for lib/router.mjs
+// scripts/test-router.mjs — unit conversion tests for lib/router.mjs
+//
+// Retargeted: lib/router.mjs is now only token lookup and unit conversion. The
+// verifyBuildAgainstQuote cases tested a SERVER-ASSEMBLED swap and went with the
+// router; see scripts/test-swap-outputs.mjs for where that reasoning ended up.
 //
 // Unit tier: pure functions and validation, no network. Each test asserts a
 // literal expected value against one concrete input, so it fails under a real
@@ -9,7 +13,7 @@
 // The live tier at the bottom is opt-in: it talks to the real Riften router and
 // only asserts the contract shape, not prices, which move.
 
-import { bchToBaseUnits, baseUnitsToBch, verifyBuildAgainstQuote } from '../lib/router.mjs';
+import { bchToBaseUnits, baseUnitsToBch, toBaseUnits } from '../lib/router.mjs';
 
 let passed = 0;
 let failed = 0;
@@ -95,48 +99,12 @@ console.log('\n--- verifyBuildAgainstQuote (the sign gate) ---');
 const goodQuote = { outputAmount: '500', inputAmount: '1000', priceBefore: '2', priceAfter: '2', poolCount: 1, inputIsBch: true, outputIsBch: false };
 const goodBuild = { unsignedTxHex: '02000000', inputsToSign: [0], expectedOutput: '500', feeSats: '10', feeTokenAmount: '0', minerFeeSats: '2', sourceOutputs: [] };
 
-test('matching quote and build passes the gate', () => {
-  const r = verifyBuildAgainstQuote(goodQuote, goodBuild);
-  eq(r.ok, true);
-  eq(r.problems.length, 0);
-});
 
-test('output drifting below the quote blocks signing', () => {
-  const r = verifyBuildAgainstQuote(goodQuote, { ...goodBuild, expectedOutput: '400' });
-  eq(r.ok, false);
-  if (!r.problems.join(' ').includes('output changed')) throw new Error('missing drift reason');
-});
 
-test('output drifting ABOVE the quote also blocks (unexpected tx)', () => {
-  const r = verifyBuildAgainstQuote(goodQuote, { ...goodBuild, expectedOutput: '600' });
-  eq(r.ok, false);
-});
 
-test('slippage floor is enforced against the built output', () => {
-  const r = verifyBuildAgainstQuote(goodQuote, { ...goodBuild, expectedOutput: '400' }, { minOutput: '450' });
-  eq(r.ok, false);
-  if (!r.problems.join(' ').includes('slippage floor')) throw new Error('missing floor reason');
-});
 
-test('output at exactly the floor passes', () => {
-  // The floor is only meaningful once the build matches its quote, so this
-  // uses a quote that agrees with the build. Checking the floor against a
-  // drifted build would fail on the drift first and never reach it.
-  const quote450 = { ...goodQuote, outputAmount: '450' };
-  const r = verifyBuildAgainstQuote(quote450, { ...goodBuild, expectedOutput: '450' }, { minOutput: '450' });
-  eq(r.ok, true);
-});
 
-test('a build with nothing to sign is rejected', () => {
-  const r = verifyBuildAgainstQuote(goodQuote, { ...goodBuild, inputsToSign: [] });
-  eq(r.ok, false);
-  if (!r.problems.join(' ').includes('no inputs')) throw new Error('missing empty-sign reason');
-});
 
-test('an empty transaction is rejected', () => {
-  const r = verifyBuildAgainstQuote(goodQuote, { ...goodBuild, unsignedTxHex: '' });
-  eq(r.ok, false);
-});
 
 console.log(`\n============================================================\nRESULT: ${passed} passed, ${failed} failed (${passed + failed} total)`);
 process.exit(failed === 0 ? 0 : 1);

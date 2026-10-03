@@ -19,7 +19,7 @@
 
 import { generateTransaction, encodeTransaction, walletTemplateToCompilerBCH, importWalletTemplate, walletTemplateP2pkhNonHd, cashAddressToLockingBytecode } from '@bitauth/libauth';
 import { hexToBin } from '../lib/hex.mjs';
-import { broadcastViaElectrum } from '../lib/router.mjs';
+import { broadcastViaElectrum } from '../lib/network.mjs';
 import { connect } from '../lib/network.mjs';
 
 let passed = 0;
@@ -41,8 +41,14 @@ console.log('--- accepts both shapes a node may return ---');
     'a bare 64-hex-char string is a txid');
   ok((await broadcastViaElectrum({ request: async () => ({ txid: TXID }) }, 'ff')).txid === TXID,
     'an object with a txid is accepted');
-  ok((await broadcastViaElectrum({ request: async () => ({ txid: TXID.toUpperCase() }) }, 'ff')).txid === TXID.toUpperCase(),
-    'an uppercase txid is passed through rather than normalised');
+  // Normalised to lowercase, deliberately. The old router implementation passed
+  // the node's casing through, and this test asserted that. A txid is
+  // case-insensitive, but a caller that compares it against a locally computed
+  // lowercase txid must not fail on casing alone, so normalising is the safer
+  // contract. This assertion is changed, not weakened: it now pins the
+  // behaviour the shared validator actually guarantees.
+  ok((await broadcastViaElectrum({ request: async () => ({ txid: TXID.toUpperCase() }) }, 'ff')).txid === TXID,
+    'an uppercase txid is normalised to lowercase');
 }
 
 console.log('--- refuses anything that is not a txid ---');
