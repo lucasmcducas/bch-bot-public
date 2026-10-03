@@ -14,14 +14,35 @@ import { connect, scripthashForAddress, listUnspent,
 } from '../lib/network.mjs';
 import {
   loadWallet,
+  loadState,
   deriveReceivingAddresses,
   deriveChangeAddresses,
 } from '../lib/wallet.mjs';
 import { sumFtBalances } from '../lib/tokens.mjs';
 import { describeToken } from '../lib/token-registry.mjs';
 
-const RECEIVING_GAP = 20;
-const CHANGE_GAP = 20;
+// Gap limits for the address scan.
+//
+// A fixed window of 20 is wrong on both sides. The wallet's own state tracks the
+// next unused index on each chain, and a UTXO can exist at ANY index the wallet
+// has ever derived -- including change addresses well past 20. Measured on
+// 2026-10-02: this wallet held 855,311 sat on change index 38, and `balance`
+// reported 0.00803 BCH because it only looked at indices 0..19. The money was
+// never lost; the tool could not see it.
+//
+// So: scan up to the wallet's own counter (plus a small forward window for
+// addresses reserved but not yet used), with a floor so an empty state file
+// still scans something useful, and a ceiling so a corrupted counter cannot
+// trigger thousands of derivations on a 4-core box.
+const SCAN_FLOOR = 20;
+const SCAN_CEILING = 200;
+const FORWARD_WINDOW = 5;
+
+function scanCount(stateKey, state) {
+  const used = Number(state?.[stateKey] ?? 0);
+  if (!Number.isFinite(used) || used < 0) return SCAN_FLOOR;
+  return Math.min(SCAN_CEILING, Math.max(SCAN_FLOOR, used + FORWARD_WINDOW));
+}
 
 function parseArgs() {
   const args = process.argv.slice(2);
@@ -69,13 +90,23 @@ async function main() {
   const network = opts.network || w.network;
   console.error(`network: ${network}`);
 
+  // Derive the scan window from the wallet's own counters, so a UTXO on a high
+  // change index is visible. Declared before the verbose block because the scan
+  // itself needs it, not just the log line.
+  const st = loadState();
+  const recvCount = scanCount('address_index', st);
+  const chgCount = scanCount('change_index', st);
+
   const client = await connect(network);
   try {
     if (opts.verbose) {
-      console.error(`scanning first ${RECEIVING_GAP} receiving addresses + ${CHANGE_GAP} change addresses...`);
+      console.error(
+        `scanning ${recvCount} receiving + ${chgCount} change addresses ` +
+        `(state: addr ${st.address_index}, change ${st.change_index})...`
+      );
     }
-    const recv = await queryChain(client, deriveReceivingAddresses(RECEIVING_GAP), opts);
-    const chg = await queryChain(client, deriveChangeAddresses(CHANGE_GAP), opts);
+    const recv = await queryChain(client, deriveReceivingAddresses(recvCount), opts);
+    const chg = await queryChain(client, deriveChangeAddresses(chgCount), opts);
 
     const totalConfirmed = recv.confirmed + chg.confirmed;
     const totalUnconfirmed = recv.unconfirmed + chg.unconfirmed;
