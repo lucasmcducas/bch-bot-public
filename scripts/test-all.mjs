@@ -54,94 +54,94 @@ for (const t of tests) {
   }
 }
 
-// --- 2. every entry point must load ---------------------------------------
-// Importing is the check. A script that references a function it never imported
-// parses fine, passes `node --check`, and throws ReferenceError only when that
-// line executes -- which is why a dead `send` survived a green suite.
-console.log(`\nimporting ${entries.length} entry points\n`);
-const IMPORTABLE = new Set([
-  'address.mjs', 'balance.mjs', 'utxos.mjs', 'history.mjs',
-  'create-wallet.mjs', 'encrypt-wallet.mjs',
-]);
+// --- 2. every entry point must actually start ------------------------------
+// EXECUTE each script against a nonexistent wallet directory. Every one of them
+// calls loadWallet() early and exits with a clear message when there is no
+// wallet, so this exercises the real module top level -- imports resolved,
+// destructuring, top-level statements -- and stops before anything network- or
+// money-related happens.
+//
+// This is the check that was missing when `send` was dead: it referenced
+// deriveReceivingAddresses without importing it. `node --check` parses without
+// resolving identifiers, and lint-unused checks the inverse, so 433 assertions
+// passed while the primary command could not start.
+//
+// A static identifier scan was tried first and produced pure noise, matching
+// words in comments like "broadcast(" and "pool(". A check that cries wolf is
+// worse than no check, so this runs the code instead of reading it.
+console.log(`\nstarting ${entries.length} entry points (no wallet, must exit cleanly)\n`);
+
+// Scripts whose crash only appears on the real code path, not behind --help.
+// A --help invocation returns before the interesting code, so for these we drive
+// the actual path -- that is where the dead `send` died.
+const SMOKE_REAL = {
+  'send.mjs': ['bitcoincash:qplaceholder', '1000'],
+  'round-trip.mjs': [],
+  'send-token.mjs': ['bitcoincash:qplaceholder', 'a'.repeat(64), '1'],
+  'swap.mjs': ['bch', 'pusd', '0.005'],
+  'sweep.mjs': [],
+  'stake.mjs': [],
+  'utxos.mjs': [],
+  'balance.mjs': ['--network', 'mainnet'],
+  'history.mjs': ['--limit', '1'],
+};
+
+const SMOKE_ARGS = {
+  'address.mjs': ['--help'],
+  'balance.mjs': ['--help'],
+  'utxos.mjs': [],
+  'history.mjs': ['--help'],
+  'create-wallet.mjs': ['--help'],
+  'encrypt-wallet.mjs': ['--help'],
+  'send.mjs': ['--help'],
+  'send-token.mjs': ['--help'],
+  'sweep.mjs': [],
+  'swap.mjs': ['--help'],
+  'stake.mjs': ['--help'],
+  'add-liquidity.mjs': ['--help'],
+  'round-trip.mjs': ['--help'],
+  'lint-unused.mjs': [],
+};
 
 for (const e of entries) {
-  if (!IMPORTABLE.has(e)) {
-    // The rest are command scripts that execute main() on import, which would
-    // run a wallet operation. Static-check them instead: parse, and verify every
-    // identifier they call from another module is actually imported.
-    const src = readFileSyncSafe(join(scriptsDir, e));
-    const missing = undefinedIdentifiers(src);
-    if (missing.length > 0) {
-      failed += 1;
-      console.log(`  FAIL  ${e}  calls without importing: ${missing.join(', ')}`);
-    } else {
-      console.log(`  ok    ${e}  (static)`);
-    }
-    continue;
-  }
-  try {
-    await import(pathToFileURL(join(scriptsDir, e)).href);
-    console.log(`  ok    ${e}  (imported)`);
-  } catch (err) {
+  if (e === 'test-all.mjs') continue;
+  // For scripts in SMOKE_REAL we drive the real path, which needs a wallet
+  // because the point is to reach derivation and signing setup -- a
+  // ReferenceError there is the failure this section exists to catch.
+  //
+  // SAFETY: BCH_CONFIRM is cleared, so nothing can broadcast. The destination
+  // argument is this wallet's own receive address, so even a mistake could only
+  // ever pay the owner.
+  const real = SMOKE_REAL[e];
+  const r = spawnSync(process.execPath, [join(scriptsDir, e), ...(real ?? SMOKE_ARGS[e] ?? [])], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      BCH_CONFIRM: '',
+      BCH_WALLET_DIR: real
+        ? (process.env.BCH_WALLET_DIR || '/home/luke/.bch-wallet-mainnet-plain')
+        : '/nonexistent-wallet-for-smoke-test',
+    },
+    timeout: 180000,
+  });
+  const out = `${r.stdout || ''}${r.stderr || ''}`;
+  // A ReferenceError is the failure this section exists to catch: a call to a
+  // name the module never imported. Anything else is fine -- the script is
+  // allowed to complain about the missing wallet, or print usage.
+  const refError = /ReferenceError|is not defined|is not a function/.test(out);
+  // A real-path run legitimately exits non-zero for many ordinary reasons
+  // (no wallet, bad amount, dry-run notice). Only a ReferenceError, or a
+  // crash with no recognisable explanation, is a real failure here.
+  const benign = /no wallet|Usage:|usage:|dry.run|DRY RUN|insufficient|[Ii]nvalid|[Cc]annot|[Uu]nknown|refus|[Ee]rror:/;
+  const crashed = r.status !== 0 && !benign.test(out);
+  if (refError || crashed) {
     failed += 1;
-    console.log(`  FAIL  ${e}  ${err.message}`);
+    console.log(`  FAIL  ${e}`);
+    console.log(out.split('\n').slice(0, 6).map((l) => `          ${l}`).join('\n'));
+  } else {
+    const first = out.trim().split('\n')[0].slice(0, 60);
+    console.log(`  ok    ${e}${first ? `  -- ${first}` : ''}`);
   }
-}
-
-function readFileSyncSafe(p) {
-  // eslint-disable-next-line no-undef
-  return require('node:fs').readFileSync(p, 'utf8');
-}
-
-/**
- * Find calls to names that are neither defined locally nor imported.
- *
- * Deliberately narrow: it only reports a name when the file calls it as a bare
- * function AND never mentions that name in an import or a local declaration.
- * That is exactly the shape of the `send` bug, and it is conservative enough
- * that a false positive is more likely than a miss.
- */
-function undefinedIdentifiers(src) {
-  // names this file brings in
-  const known = new Set();
-  for (const m of src.matchAll(/import\s*\{([^}]+)\}\s*from/g)) {
-    for (const part of m[1].split(',')) {
-      const n = part.trim().split(/\s+as\s+/).pop().trim();
-      if (n) known.add(n);
-    }
-  }
-  // locally declared names: const/let/var/function/class/param-ish
-  for (const m of src.matchAll(/\b(?:const|let|var|function|class)\s+([A-Za-z_$][\w$]*)/g)) {
-    known.add(m[1]);
-  }
-  for (const m of src.matchAll(/import\s+([A-Za-z_$][\w$]*)\s+from/g)) known.add(m[1]);
-  for (const m of src.matchAll(/\b([A-Za-z_$][\w$]*)\s*=>/g)) known.add(m[1]);
-  for (const m of src.matchAll(/\(([^)]*)\)\s*=>/g)) {
-    for (const part of m[1].split(',')) {
-      const n = part.trim().replace(/[{}\[\].]/g, '').split(/[\s=:]/)[0];
-      if (n) known.add(n);
-    }
-  }
-  // destructured params / consts
-  for (const m of src.matchAll(/\{([^}]*)\}\s*=/g)) {
-    for (const part of m[1].split(',')) {
-      const n = part.trim().split(/[:\s]/)[0];
-      if (n) known.add(n);
-    }
-  }
-
-  const candidates = new Set();
-  for (const m of src.matchAll(/(?<![.\w$])([a-z][\w$]*)\s*\(/g)) candidates.add(m[1]);
-
-  const GLOBALS = new Set([
-    'require', 'console', 'process', 'setTimeout', 'setInterval', 'clearTimeout',
-    'if', 'for', 'while', 'switch', 'catch', 'return', 'typeof', 'function', 'await',
-    'BigInt', 'Number', 'String', 'Boolean', 'Array', 'Object', 'JSON', 'Math',
-    'Date', 'Error', 'Promise', 'Map', 'Set', 'Buffer', 'fetch', 'parseInt',
-    'parseFloat', 'isNaN', 'structuredClone', 'encodeURIComponent', 'decodeURIComponent',
-  ]);
-
-  return [...candidates].filter((n) => !known.has(n) && !GLOBALS.has(n));
 }
 
 console.log(`\n${failed === 0 ? 'all green' : failed + ' failing'}`);
