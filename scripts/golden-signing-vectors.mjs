@@ -12,8 +12,6 @@ import {
   secp256k1,
   generateSigningSerializationBCH,
   SigningSerializationFlag,
-  decodeTransaction,
-  encodeTransaction,
   hash256,
 } from '@bitauth/libauth';
 import { deriveSeedFromBip39Mnemonic, deriveHdPrivateNodeFromSeed, deriveHdPath } from '@bitauth/libauth';
