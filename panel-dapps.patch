@@ -1,0 +1,134 @@
+diff --git a/BchWalletPanel.qml b/BchWalletPanel.qml
+index 38d8a93..2e133c4 100644
+--- a/BchWalletPanel.qml
++++ b/BchWalletPanel.qml
+@@ -84,6 +84,14 @@ Item {
+   property string swapMinOutput: ""
+   property var swapQuote: null
+ 
++  // WizardConnect dapp pairing. wizUri is the pairing link the dapp shows;
++  // dappState is the connection state the wallet reports, and dappRequest is
++  // the most recent sign request awaiting a decision.
++  property string wizUri: ""
++  property string dappState: "not connected"
++  property var dappRequest: null
++  property bool dappBusy: false
++
+   // Which flow a running command belongs to, so one Process can serve all of
+   // them: balance | address | send-preview | send-confirm | swap-quote |
+   // swap-execute.
+@@ -224,6 +232,23 @@ Item {
+   // The result is a tagged union rather than a callback: a callback stashed on
+   // the Process would need a property the type does not have, and a plain
+   // string cannot say which view it belongs to.
++  // Pair with a dapp. The wallet process holds the relay connection open and
++  // reads the approval decision from its own stdin, so the panel runs it the
++  // way a person would: no wrapper, no auto-approve, no flag.
++  function pairDapp() {
++    var uri = wizUri.trim()
++    if (!uri) return fail("paste the wiz:// pairing link from the dapp")
++    if (uri.indexOf("wiz://") !== 0)
++      return fail("that does not look like a wiz:// pairing link")
++    dappRequest = null
++    dappState = "connecting…"
++    run(["bch-bot", "wizardconnect", "pair", uri], "dapp-pair")
++  }
++
++  function refreshDapps() {
++    run(["bch-bot", "wizardconnect", "status"], "dapp-status")
++  }
++
+   function run(cmd, kind, env, silent) {
+     if (status === "busy") return
+     pendingSilent = silent === true
+@@ -638,8 +663,13 @@ Item {
+           text: "Send"
+           onClicked: { root.view = "send" }
+         }
++        Button {
++          text: "Dapps"
++          onClicked: { root.view = "dapps"; root.refreshDapps() }
++        }
+         Button {
+           text: "Swap"
++
+           onClicked: { root.view = "swap"; root.swapSell = "BCH"; root.swapBuy = "pusd" }
+         }
+       }
+@@ -984,6 +1014,76 @@ Item {
+         onClicked: if (root.closeRequested) root.closeRequested()
+       }
+     }
++
++    // ---- dapps (WizardConnect)
++    //
++    // A dapp builds the transaction; this wallet signs it. The panel only
++    // ever runs `bch-bot wizardconnect`, which holds the relay connection and
++    // reads the approval decision from its own stdin. There is deliberately no
++    // approve-all control here: the decision is made where the request is
++    // rendered, by a person.
++    ColumnLayout {
++      visible: root.view === "dapps"
++      spacing: Style.spacing
++
++      Text {
++        text: "Connect a dapp"
++        color: root.fg
++        font.pixelSize: Style.font.subheading
++        font.family: Style.font.family
++        font.bold: true
++      }
++
++      Text {
++        text: "The dapp builds the trade; this wallet signs it. Paste the pairing link the dapp shows."
++        color: root.fgDim
++        font.pixelSize: Style.font.caption
++        font.family: Style.font.family
++        wrapMode: Text.WordWrap
++        Layout.fillWidth: true
++      }
++
++      TextField {
++        id: wizField
++        placeholderText: "wiz://…"
++        text: root.wizUri
++        color: root.fg
++        Layout.fillWidth: true
++        onAccepted: root.pairDapp()
++      }
++
++      RowLayout {
++        spacing: Style.spacing
++        Button {
++          text: root.dappBusy ? "Connecting…" : "Connect"
++          enabled: !root.dappBusy
++          onClicked: root.pairDapp()
++        }
++        Button {
++          text: "Refresh"
++          enabled: !root.dappBusy
++          onClicked: root.refreshDapps()
++        }
++      }
++
++      Text {
++        text: root.dappState
++        color: root.dappBusy ? root.accent : root.fgDim
++        font.pixelSize: Style.font.caption
++        font.family: Style.font.family
++        wrapMode: Text.WordWrap
++        Layout.fillWidth: true
++      }
++
++      Text {
++        text: "Approval is asked for in the wallet process, where the full transaction is shown. This panel never approves for you."
++        color: root.fgDim
++        font.pixelSize: Style.font.caption
++        font.family: Style.font.family
++        wrapMode: Text.WordWrap
++        Layout.fillWidth: true
++      }
++    }
+   }
+ 
+   Component.onCompleted: loadBalance()
