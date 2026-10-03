@@ -1,0 +1,12 @@
+[eval]:2
+import(./lib/router.mjs).then(async (R) => {
+       ^
+Expression expected
+
+SyntaxError: Unexpected token '.'
+    at makeContextifyScript (node:internal/vm:194:14)
+    at compileScript (node:internal/process/execution:422:10)
+    at evalTypeScript (node:internal/process/execution:294:22)
+    at node:internal/main/eval_string:71:3
+
+Node.js v26.8.2
