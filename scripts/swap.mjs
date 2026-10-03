@@ -19,7 +19,7 @@
 // builds the unsigned transaction and names the inputs we own; we sign only
 // those and broadcast. See lib/router.mjs.
 
-import { connect, scripthashForAddress, listUnspent, scriptHasUnspent,
+import { connect, scripthashForAddress, listUnspent,
   outpointIsUnspent, connectToken,
  } from '../lib/network.mjs';
 import { loadWallet, loadHdNode, loadState, deriveReceivingAddresses,
