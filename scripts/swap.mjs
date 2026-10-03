@@ -21,7 +21,8 @@
 
 import { connect, scripthashForAddress, listUnspent, scriptHasUnspent,
 } from '../lib/network.mjs';
-import { loadWallet, loadHdNode, loadState, deriveReceivingAddresses, deriveChangeAddresses, newChangeAddress, commitChangeAddress, deriveChildPrivKey } from '../lib/wallet.mjs';
+import { loadWallet, loadHdNode, loadState, deriveReceivingAddresses,
+  scanCount, deriveChangeAddresses, newChangeAddress, commitChangeAddress, deriveChildPrivKey } from '../lib/wallet.mjs';
 import { addressToLockingBytecode, signExternalTransaction } from '../lib/sign.mjs';
 import { binToHex } from '../lib/hex.mjs';
 import { quote, buildSwap, verifyBuildAgainstQuote, verifyTransactionOutputs, broadcastViaElectrum, broadcastSwap, resolveToken, bchToBaseUnits, toBaseUnits } from '../lib/router.mjs';
@@ -91,7 +92,10 @@ function displayAmount(baseUnits, decimals) {
   return `${v / div}.${(v % div).toString().padStart(d, '0')}`;
 }
 
-async function main() {
+// One full attempt: quote, fund, build, verify, sign, broadcast. Everything in
+// here can be invalidated by another trader between any two steps, so a retry
+// must re-run ALL of it -- never resume partway.
+async function runAttempt(attempt = 1) {
   const { sell: sellArg, buy: buyArg, amount: amountArg, quoteOnly, minOutput } = parseArgs();
 
   const [sellTok, buyTok] = await Promise.all([resolveToken(sellArg), resolveToken(buyArg)]);
@@ -146,9 +150,21 @@ async function main() {
   // balance. On this wallet 856,855 of 1,657,855 sat sat on a change address,
   // so a receiving-only scan could only ever offer 801,000 sat. balance.mjs and
   // sweep.mjs already scan both; this keeps the three consistent.
+  // Derive the scan window from the wallet's own counters, not a fixed 20. The
+  // hardcoded limit meant this wallet's coin at change index 38 was invisible
+  // here, exactly as it was to balance.mjs -- and the failure is silent, because
+  // a scan that finds little reports "not enough funds" rather than "looked in
+  // the wrong place".
+  const st = loadState();
+  const recvCount = scanCount('address_index', st);
+  const chgCount = scanCount('change_index', st);
+  console.error(
+    `      scanning ${recvCount} receiving + ${chgCount} change addresses ` +
+    `(state: addr ${st.address_index}, change ${st.change_index})...`
+  );
   const addrs = [
-    ...deriveReceivingAddresses(20).map((a) => ({ ...a, chain: 'recv' })),
-    ...deriveChangeAddresses(20).map((a) => ({ ...a, chain: 'change' })),
+    ...deriveReceivingAddresses(recvCount).map((a) => ({ ...a, chain: 'recv' })),
+    ...deriveChangeAddresses(chgCount).map((a) => ({ ...a, chain: 'change' })),
   ];
   const byAddress = new Map(addrs.map((a) => [a.address, a]));
   const client = await connect(w.network);
@@ -542,12 +558,73 @@ async function broadcastSwapWithFallback(network, signedTxHex) {
     attempts.push(`cauldron http: ${e.message}`);
   }
 
-  throw new Error(
+  const err = new Error(
     `could not broadcast the signed transaction by either path:\n` +
     attempts.map((a) => `  - ${a}`).join('\n') +
     `\n\nThe transaction IS signed and valid. Its hex is above; it can be broadcast\n` +
     `by hand, or the swap can be retried once a path is reachable.`
   );
+
+  // "Missing inputs" is the pools going stale under us: a competing swap consumed
+  // them between our build and our broadcast. The bytes are permanently dead, so
+  // the only fix is a rebuild against a fresh quote. A transport error (node
+  // down, TLS failing) leaves the transaction perfectly valid, so retrying the
+  // same hex would work -- but that is handled by broadcastSwapWithFallback
+  // already trying both paths, and rebuilding on a network blip would move the
+  // price against the user for nothing.
+  err.retryable = attempts.some((a) => /missing inputs|bad-txns-inputs|txn-mempool-conflict|conflict/i.test(a));
+  err.signedHex = signedTxHex;
+  throw err;
+}
+
+// Retry wrapper.
+//
+// Cauldron pool UTXOs are shared state. A competing swap can consume the exact
+// inputs we selected while we are still building, and the node then rejects our
+// perfectly-valid signed transaction with "Missing inputs". Measured 2026-10-02:
+// a swap that passed every local gate (quote matched build, 2/15 outputs ours,
+// 13/13 pool inputs verified unspent across two nodes) was still rejected at
+// broadcast for exactly this reason.
+//
+// Retrying the same bytes is guaranteed to fail -- they name inputs that are
+// gone. So a retry re-runs the entire attempt against fresh pool state. Bounded
+// because each attempt costs a quote and can move the price against the user;
+// three is enough to ride out a contended block, and past that the pool is not
+// for us right now.
+const MAX_ATTEMPTS = Number(process.env.BCH_SWAP_ATTEMPTS || 3);
+
+async function main() {
+  let lastErr = null;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      return await runAttempt(attempt);
+    } catch (e) {
+      lastErr = e;
+      const canRetry = e.retryable && attempt < MAX_ATTEMPTS;
+      if (!canRetry) {
+        if (e.retryable) {
+          console.error(
+            `\n[retry] still "Missing inputs" after ${attempt} attempt(s) -- the pools are\n` +
+            `        being contested. Nothing was spent; your funds are unchanged.`
+          );
+        }
+        throw e;
+      }
+      // The signed hex from the failed attempt is printed so a human can inspect
+      // it, but it is never re-broadcast: it is dead by construction.
+      console.error(
+        `\n[retry] ${attempt}/${MAX_ATTEMPTS} rejected: ` +
+        `${String(e.message).split('\n')[0].trim()}`
+      );
+      console.error(
+        '        the pool inputs we selected were consumed by another swap between our\n' +
+        '        build and our broadcast. Re-quoting and rebuilding against fresh state.'
+      );
+      // Back off a little so we are not the same contention we just lost to.
+      await new Promise((r) => setTimeout(r, 1500 * attempt));
+    }
+  }
+  throw lastErr;
 }
 
 main().catch((e) => { console.error('error:', e.message); process.exit(1); });
