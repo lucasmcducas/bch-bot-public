@@ -1,0 +1,48 @@
+Measure which broadcast path actually works before reordering them
+
+The spec says to prefer broadcast.cauldron.quest over a single node, so the
+obvious change was to flip the order in broadcastSwapWithFallback. Measuring
+first showed that would have made things strictly worse.
+
+RESULT: the pool-broadcast endpoint is DOWN, and has been.
+
+    $ curl https://broadcast.cauldron.quest/broadcast
+    curl: (35) TLS connect error: error:0A000438:SSL routines::tlsv1 alert internal error
+
+    $ openssl s_client -connect broadcast.cauldron.quest:443 -servername ...
+    no peer certificate available
+    New, (NONE), Cipher is (NONE)
+
+The server presents NO certificate at all -- TLS alert number 80, subject=(NONE).
+It is an HTTP server with a broken TLS terminator in front of it. Port 80 does
+answer, and returns an HTML error page for /broadcast, with GET /broadcast -> 404.
+
+Not a local networking problem, and not the dead-IPv6 route this box has bitten
+before: it fails identically forced to IPv4 (89.106.200.1) and over IPv6
+(2a12:5240::1). router-mainnet.gnosis.ink presents a valid Let's Encrypt cert
+from the same network, so the box's TLS stack is fine.
+
+The old comment in lib/router.mjs was therefore CORRECT and I was about to
+overturn it on the strength of a doc sentence, without re-measuring the thing the
+comment was about. Reordering would have turned a working primary path into a
+primary path that always fails.
+
+What DOES answer:
+
+    server.version      -> ["Rostrum 15.0.0","1.4.3"]
+    headers.subscribe   -> {"height":971315,...}
+    broadcast '00'      -> {}          <-- garbage
+    broadcast <real tx> -> {}          <-- our valid, spec-conformant swap
+
+The decisive measurement: an obviously invalid 1-byte hex returns exactly the
+same empty object as our correctly-built transaction. A node that cannot
+distinguish a real transaction from the string "00" is not evaluating it, so the
+{} says nothing about our transaction at all.
+
+That is the fourth distinct explanation this investigation has produced for one
+rejection (pool contention, nonexistent prevouts, unsigned transaction, invalid
+output index), and the first three were all wrong. Every one of them came from
+reading a node's answer as a verdict about our transaction when the node had not
+actually evaluated it.
+
+No funds moved: 0.01659311 BCH, 6 UTXOs, 2 ROACH, change_index 39.
