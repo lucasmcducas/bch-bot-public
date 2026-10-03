@@ -159,18 +159,34 @@ async function main() {
       const utxos = await listUnspent(client, sh);
       if (!Array.isArray(utxos)) continue;
       for (const u of utxos) {
+        // Two different jobs, and conflating them makes a token swap impossible
+        // to fund:
+        //
+        //   1. the SELL ASSET, which must match the trade's sell side
+        //   2. the COIN, which pays the miner fee and is needed even when the
+        //      sell asset is a token
+        //
+        // This filter used to require a UTXO to match the sell side, which
+        // dropped every plain BCH UTXO on a token sell. A token UTXO carries
+        // only its own dust-level sats (1000 here), nowhere near the ~13,000
+        // sats a swap's outputs plus miner fee need, so the router rejected the
+        // set with "insufficient_funds: inputs 14188 sats cannot cover outputs
+        // 13184 + miner fee 1173" -- 14,188 being the router's own total for
+        // the two token UTXOs we sent it. The 801,000 sats of plain BCH the
+        // wallet actually held were never offered.
+        //
+        // So: always include plain BCH as coin, and include token UTXOs only
+        // when they match the sell asset. Sending a DIFFERENT token as funding
+        // would hand the router an input it cannot use, so those stay out.
         const isToken = !!u.token_data;
-        if (isToken) {
-          if (u.token_data?.category !== sellTok.categoryId) continue;
-        } else if (sellTok.categoryId !== 'bch') {
-          continue;
-        }
+        if (isToken && u.token_data?.category !== sellTok.categoryId) continue;
         funding.push({
           txid: u.tx_hash,
           vout: u.tx_pos,
           value: String(u.value),
           scriptHex: binToHex(addressToLockingBytecode(a.address)),
           token: isToken ? { category: sellTok.categoryId, amount: String(u.token_data.amount) } : null,
+          role: isToken ? 'sell-asset' : 'coin',
           address: a.address,
           index: a.index,
           chain: a.chain,
@@ -185,7 +201,13 @@ async function main() {
     console.error(`no ${sellTok.symbol} UTXOs available to fund the swap`);
     process.exit(2);
   }
-  console.error(`      ${funding.length} UTXO(s) available`);
+  const sellAssets = funding.filter((f) => f.role === 'sell-asset');
+  const coins = funding.filter((f) => f.role === 'coin');
+  const sellSats = sellAssets.reduce((a, f) => a + BigInt(f.value), 0n);
+  const coinSats = coins.reduce((a, f) => a + BigInt(f.value), 0n);
+  console.error(
+    `      ${funding.length} UTXO(s) available: ${sellAssets.length} sell-asset (${sellSats} sat), ${coins.length} coin (${coinSats} sat)`,
+  );
 
   const receiveAddr = addrs[0].address;
   // A dry run must not advance wallet state. newChangeAddress() derives the
@@ -203,6 +225,7 @@ async function main() {
     sell: sellTok.categoryId, buy: buyTok.categoryId, amount: amountBase, side: 'sell',
     funding: funding.map(({ txid, vout, value, scriptHex, token }) =>
       token ? { txid, vout, value, scriptHex, token } : { txid, vout, value, scriptHex }),
+    // role is local bookkeeping only and is deliberately not sent.
     receiveAddr, changeAddr,
     minOutput: minOutput || undefined,
   });
