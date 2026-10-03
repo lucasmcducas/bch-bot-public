@@ -23,7 +23,7 @@ import { readFileSync } from 'fs';
 import { createHash } from 'crypto';
 import { decodeTransactionBCH } from '@bitauth/libauth';
 import { hexToBin } from '../lib/hex.mjs';
-import { connect, listUnspent } from '../lib/network.mjs';
+import { connectToken, listUnspent } from '../lib/network.mjs';
 
 let passed = 0, failed = 0;
 const check = (name, cond, detail = '') => {
@@ -37,7 +37,7 @@ try { hex = readFileSync(path, 'utf8').trim(); }
 catch { console.log(`cannot read ${path}`); process.exit(1); }
 
 const tx = decodeTransactionBCH(hexToBin(hex));
-const c = await connect('mainnet');
+const c = await connectToken('mainnet');
 
 const wireOf = (u8) => Buffer.from(u8).toString('hex');
 const revHex = (h) => Buffer.from(h).reverse().toString('hex');
