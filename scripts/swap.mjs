@@ -20,7 +20,8 @@
 // those and broadcast. See lib/router.mjs.
 
 import { connect, scripthashForAddress, listUnspent, scriptHasUnspent,
-} from '../lib/network.mjs';
+  outpointIsUnspent, connectToken,
+ } from '../lib/network.mjs';
 import { loadWallet, loadHdNode, loadState, deriveReceivingAddresses,
   scanCount, deriveChangeAddresses, newChangeAddress, commitChangeAddress, deriveChildPrivKey } from '../lib/wallet.mjs';
 import { addressToLockingBytecode, signExternalTransaction } from '../lib/sign.mjs';
@@ -348,7 +349,12 @@ async function runAttempt(attempt = 1) {
   // right test. Check before signing: after signing we have spent a signature
   // and a fee to learn the route was stale.
   {
-    const checkClient = await connect(w.network);
+    // Token-aware node, NOT connect(w.network). The pool parents are Cauldron
+    // covenant transactions: a plain Fulcrum node does not index p2sh32 and
+    // answers every blockchain.transaction.get for them with a null, so every
+    // pool input read as "parent unknown" and the stale-pool gate silently
+    // degraded to "could not read anything" on every run.
+    const checkClient = await connectToken();
     const stale = [];
     let unreadable = 0;
     try {
@@ -377,7 +383,7 @@ async function runAttempt(attempt = 1) {
             .catch(() => null);
           if (typeof parent === 'string') { raw = candidate; break; }
         }
-        if (typeof parent !== 'string') { stale.push({ i, raw: wireOrder, vout, why: 'parent unknown' }); continue; }
+          stale.push({ i, raw, vout, why: 'outpoint not in the unspent set' });
         // Decode the parent with libauth instead of walking it by hand.
         //
         // The pool parent is 10,851 bytes with 57 inputs and 56 outputs, and the
@@ -414,12 +420,17 @@ async function runAttempt(attempt = 1) {
         // covenants of a real quote: Rostrum saw 1..60 unspent each, Fulcrum saw
         // none, and 13 of 13 disagreed. Reading the empty answer as
         // 'already spent' would refuse a perfectly good swap.
-        const verdict = await scriptHasUnspent(Buffer.from(lock).toString('hex'), {
+        // The EXACT outpoint, not merely this covenant has some live coin.
+        // A competing swap re-creates the covenant at a new position, so the
+        // lock keeps live outputs while our chosen outpoint is already consumed
+        // -- the weaker check passed 12/12 on a parent whose 56 outputs were all
+        // spent, and every broadcast was rejected.  is the display-order
+        // txid of the parent as the router named it.
+        const verdict = await outpointIsUnspent(Buffer.from(lock).toString('hex'), vout, raw, {
           network: w.network,
-          client: checkClient,
         });
         if (verdict === 'spent') {
-          stale.push({ i, raw, vout, why: 'already spent (confirmed by two nodes)' });
+          stale.push({ i, raw, vout, why: 'outpoint not in the unspent set' });
         } else if (verdict === 'inconclusive') {
           unreadable += 1;
         }
@@ -435,10 +446,24 @@ async function runAttempt(attempt = 1) {
     if (stale.length === 0 && unreadable < poolInputCount) {
       console.error(`      pool inputs verified unspent (${poolInputCount - unreadable}/${poolInputCount})`);
     } else if (stale.length === poolInputCount) {
-      // Every pool input failed to read. That is a transport problem (this node
-      // answered {} to every blockchain.transaction.get during the check), not
-      // evidence that the pools are spent. Say so, and let the caller proceed to
-      // a broadcast, which is the authority.
+      // EVERY pool input is confirmed spent. This is the exact case the gate
+      // exists to catch, and it used to be exempted here as a "transport
+      // problem", which is why three consecutive attempts signed and broadcast
+      // a transaction built entirely from drained positions. Refuse.
+      //
+      // A genuine transport failure lands in `unreadable`, not `stale`: a node
+      // that cannot read a parent increments unreadable, and a node that cannot
+      // see p2sh32 covenants never returns a verdict at all.
+      console.error(`REFUSING TO SIGN -- all ${poolInputCount} pool input(s) are already spent.`);
+      for (const x of stale.slice(0, 5)) {
+        console.error(`      input ${x.i}: ${x.raw?.slice(0, 16)}.. v${x.vout}  ${x.why}`);
+      }
+      throw new Error('router returned a route whose pool inputs are all spent');
+    } else if (unreadable === poolInputCount) {
+      // Every pool input could not be read. That IS a transport problem (this
+      // node answered null to every blockchain.transaction.get during the check),
+      // not evidence that the pools are spent. Say so, and let the caller proceed
+      // to a broadcast, which is the authority.
       console.error('      note: could not read the router\'s pool inputs from this node;');
       console.error('            continuing so the broadcast can confirm or refute them.');
     } else if (stale.length) {

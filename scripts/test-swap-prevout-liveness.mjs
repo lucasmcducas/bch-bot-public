@@ -70,10 +70,11 @@ for (let n = 0; n < tx.inputs.length; n++) {
   const list = await listUnspent(c, shOf(pin.lockingBytecode)).catch(() => null);
   if (!Array.isArray(list)) { rows.push(`  in[${n}] v${v}: listunspent failed`); continue; }
 
-  // A UTXO entry carries BOTH outpoint_hash and tx_hash, and they are NOT the
-  // same value: outpoint_hash is the byte-reversed form. Matching on the wrong
-  // one makes every coin look spent, which is the most expensive bug in this
-  // area -- it reports a dead route as a live one and vice versa.
+  // Byte order is the trap here, and it is NOT visible from a field name. The
+  // same txid comes back in two orderings depending on who computed it: libauth
+  // hands out wire order, Electrum's listunspent reports display order, which
+  // is the byte-reverse. Compare against BOTH or every coin reads as spent --
+  // I hit that and briefly believed the wallet's own inputs were gone.
   const want = new Set([w, revHex(w)]);
   const hit = list.find(u => want.has(u.tx_hash) && Number(u.tx_pos) === v);
   const ours = n >= tx.inputs.length - 2;
