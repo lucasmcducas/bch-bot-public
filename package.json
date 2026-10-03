@@ -53,10 +53,13 @@
     "node": ">=22"
   },
   "dependencies": {
-    "@bitauth/libauth": "3.1.0-next.2",
+    "@bch-wc2/interfaces": "0.0.16",
+    "@bitauth/libauth": "3.1.0-next.8",
     "@cashlab/cauldron": "1.0.3",
     "@cashlab/common": "1.0.5",
     "@electrum-cash/network": "4.3.0",
-    "@electrum-cash/web-socket": "4.0.3"
+    "@electrum-cash/web-socket": "4.0.3",
+    "@wizardconnect/core": "0.2.4",
+    "@wizardconnect/wallet": "0.2.3"
   }
 }
