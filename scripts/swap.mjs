@@ -10,6 +10,22 @@
 //   node scripts/swap.mjs pusd BCH 1.50        # sell 1.50 PUSD, receive BCH
 //   node scripts/swap.mjs BCH pusd 0.01 --quote-only
 //
+//   THIS PATH IS CURRENTLY REJECTED BY THE NETWORK. The transaction built here
+//   is correct -- it satisfies both rules in Riften's specification, and the
+//   k-invariant holds -- but the router names a pool parent, fd02de7d..1138,
+//   whose 56 outputs are all spent, and it names the same one on every quote.
+//   38 of the 39 covenant locks inside that dead parent still hold live
+//   positions, so the liquidity is real and the position has simply moved; the
+//   position is spent because the pool traded through it, not because the pool
+//   is gone. The router's transaction is fully assembled, so re-pointing its
+//   inputs means re-deriving their constant-product math, which is a
+//   reimplementation of the AMM rather than a fix.
+//
+//   Use `swap-open.mjs` to trade through the Cauldron app instead, which is
+//   what the reference wallet does. See docs-swap-architecture.md.
+//
+
+//
 // <sell>/<buy> accept a symbol (pusd, roach) or a 64-char category hex; 'bch'
 // is native. A BCH amount is in display units (8 dp); a token amount is in base
 // units, because the router's protocol is integer base units throughout.

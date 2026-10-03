@@ -64,6 +64,7 @@ const SCRIPT_MAP = {
   'send': 'send.mjs',
   'send-token': 'send-token.mjs',
   'swap': 'swap.mjs',
+  'swap-open': 'swap-open.mjs',
   'stake': 'stake.mjs',
   'add-liquidity': 'add-liquidity.mjs',
   'sweep': 'sweep.mjs',
