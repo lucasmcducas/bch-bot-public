@@ -454,10 +454,25 @@ async function main() {
     inputMaterial: (index) => {
       const utxo = fundingForInput.get(index);
       if (!utxo) throw new Error(`no funding UTXO supplied for input ${index}`);
+      // Resolve the FULL derivation path, not just the index. This used to pass
+      // change=0 unconditionally, so a change-chain UTXO was signed with the
+      // receiving-chain key for the same index: `/0/19` instead of `/1/19`. The
+      // signature then fails to validate against the script, and the failure
+      // surfaces as a "Missing inputs"-style rejection that reads like a
+      // malformed transaction rather than a wrong key.
+      //
+      // It stayed hidden because the funding scan only reaches change index 19
+      // while change_index is 40, so every change UTXO the swap could see
+      // happened to be on the receiving chain. That is a coincidence of current
+      // state, not a property of the code, and it breaks the first time a swap
+      // is funded from a change address. `derived.chain` is already carried from
+      // the scan, and resolveAddressPath throws rather than guessing when an
+      // address is in neither chain.
       const derived = byAddress.get(utxo.address);
       if (!derived) throw new Error(`no key derivable for input ${index}`);
+      const change = derived.chain === 'change' ? 1 : 0;
       return {
-        privateKey: deriveChildPrivKey(hdNode, 0, 0, derived.index),
+        privateKey: deriveChildPrivKey(hdNode, 0, change, derived.index),
         valueSatoshis: BigInt(utxo.value),
       };
     },
