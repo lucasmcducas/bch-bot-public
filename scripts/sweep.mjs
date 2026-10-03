@@ -21,6 +21,7 @@ import {
   loadWallet,
   loadHdNode,
   deriveReceivingAddresses,
+  scanCount,
   deriveChangeAddresses,
   newChangeAddress,
   commitChangeAddress,
@@ -33,14 +34,14 @@ const FEE_RATE_SATS_PER_BYTE = 1n;        // conservative; mainnet often 1-2 sat
 
 async function gatherAllUtxos(client) {
   const all = [];
-  for (const a of deriveReceivingAddresses(20)) {
+  for (const a of deriveReceivingAddresses(scanCount('address_index'))) {
     const sh = scripthashForAddress(a.address);
     const utxos = await listUnspent(client, sh);
     if (Array.isArray(utxos)) {
       for (const u of utxos) all.push({ address: a.address, chain: 'recv', ...u });
     }
   }
-  for (const a of deriveChangeAddresses(20)) {
+  for (const a of deriveChangeAddresses(scanCount('change_index'))) {
     const sh = scripthashForAddress(a.address);
     const utxos = await listUnspent(client, sh);
     if (Array.isArray(utxos)) {
@@ -145,8 +146,8 @@ async function main() {
     console.error('[3/4] building + signing sweep tx...');
 
     // Map candidates to signing inputs (need hdNode + derivation path)
-    const recvAddrs = deriveReceivingAddresses(20);
-    const changeAddrs = deriveChangeAddresses(20);
+    const recvAddrs = deriveReceivingAddresses(scanCount('address_index'));
+    const changeAddrs = deriveChangeAddresses(scanCount('change_index'));
     const inputs = candidates.map((u) => {
       const path = deriveChangeIndex(u.address, recvAddrs, changeAddrs);
       return {

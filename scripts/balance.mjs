@@ -15,6 +15,7 @@ import { connect, scripthashForAddress, listUnspent,
 import {
   loadWallet,
   loadState,
+  scanCount,
   deriveReceivingAddresses,
   deriveChangeAddresses,
 } from '../lib/wallet.mjs';
@@ -34,15 +35,6 @@ import { describeToken } from '../lib/token-registry.mjs';
 // addresses reserved but not yet used), with a floor so an empty state file
 // still scans something useful, and a ceiling so a corrupted counter cannot
 // trigger thousands of derivations on a 4-core box.
-const SCAN_FLOOR = 20;
-const SCAN_CEILING = 200;
-const FORWARD_WINDOW = 5;
-
-function scanCount(stateKey, state) {
-  const used = Number(state?.[stateKey] ?? 0);
-  if (!Number.isFinite(used) || used < 0) return SCAN_FLOOR;
-  return Math.min(SCAN_CEILING, Math.max(SCAN_FLOOR, used + FORWARD_WINDOW));
-}
 
 function parseArgs() {
   const args = process.argv.slice(2);

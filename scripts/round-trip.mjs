@@ -26,6 +26,7 @@ import {
   newChangeAddress,
   commitChangeAddress,
   deriveReceivingAddresses,
+  scanCount,
   deriveChangeAddresses,
 } from '../lib/wallet.mjs';
 import { signP2pkhTransaction } from '../lib/sign.mjs';
@@ -61,8 +62,8 @@ async function main() {
   // sitting unused. Tag each entry with its chain so callers can still tell
   // them apart.
   const addrs = [
-    ...deriveReceivingAddresses(20).map((a) => ({ ...a, chain: 'recv' })),
-    ...deriveChangeAddresses(20).map((a) => ({ ...a, chain: 'change' })),
+    ...deriveReceivingAddresses(scanCount('address_index')).map((a) => ({ ...a, chain: 'recv' })),
+    ...deriveChangeAddresses(scanCount('change_index')).map((a) => ({ ...a, chain: 'change' })),
   ];
     const allUtxos = [];
     for (const a of addrs) {

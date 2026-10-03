@@ -17,6 +17,7 @@ import {
   loadWallet,
   loadHdNode,
   deriveReceivingAddresses,
+  scanCount,
   deriveChangeAddresses,
   newChangeAddress,
   commitChangeAddress,
@@ -56,7 +57,7 @@ function parseArgs() {
 }
 
 async function gatherAllUtxos(client, wallet) {
-  const addrs = deriveReceivingAddresses(20);
+  const addrs = deriveReceivingAddresses(scanCount('address_index'));
   const all = [];
   for (const a of addrs) {
     const sh = scripthashForAddress(a.address);
@@ -95,7 +96,7 @@ async function main() {
     console.error('[2/7] scanning wallet UTXOs (receiving + change chains)...');
     const recvUtxos = await gatherAllUtxos(client, w);
     const changeUtxos = [];
-    for (const a of deriveChangeAddresses(20)) {
+    for (const a of deriveChangeAddresses(scanCount('change_index'))) {
       const sh = scripthashForAddress(a.address);
       const utxos = await listUnspent(client, sh);
       if (Array.isArray(utxos)) {

@@ -34,6 +34,7 @@ import {
   loadWallet,
   loadHdNode,
   deriveReceivingAddresses,
+  scanCount,
   deriveChangeAddresses,
   newChangeAddress,
   commitChangeAddress,
@@ -70,14 +71,14 @@ async function findPoolInputForToken(client, token_id) {
 async function gatherBchInputs(client, needed_sats) {
   // Find BCH-only UTXOs in the wallet (receiving + change chains).
   const allUtxos = [];
-  for (const a of deriveReceivingAddresses(20)) {
+  for (const a of deriveReceivingAddresses(scanCount('address_index'))) {
     const sh = scripthashForAddress(a.address);
     const utxos = await listUnspent(client, sh);
     if (Array.isArray(utxos)) {
       for (const u of utxos) if (!u.token_data && u.height > 0) allUtxos.push({ address: a.address, chain: 'recv', ...u });
     }
   }
-  for (const a of deriveChangeAddresses(20)) {
+  for (const a of deriveChangeAddresses(scanCount('change_index'))) {
     const sh = scripthashForAddress(a.address);
     const utxos = await listUnspent(client, sh);
     if (Array.isArray(utxos)) {
@@ -98,7 +99,7 @@ async function gatherBchInputs(client, needed_sats) {
 
 async function gatherTokenInputs(client, token_id, needed_amount) {
   const allUtxos = [];
-  for (const a of deriveReceivingAddresses(20)) {
+  for (const a of deriveReceivingAddresses(scanCount('address_index'))) {
     const sh = scripthashForAddress(a.address);
     const utxos = await listUnspent(client, sh);
     if (Array.isArray(utxos)) {
@@ -109,7 +110,7 @@ async function gatherTokenInputs(client, token_id, needed_amount) {
       }
     }
   }
-  for (const a of deriveChangeAddresses(20)) {
+  for (const a of deriveChangeAddresses(scanCount('change_index'))) {
     const sh = scripthashForAddress(a.address);
     const utxos = await listUnspent(client, sh);
     if (Array.isArray(utxos)) {
@@ -221,8 +222,8 @@ async function main() {
     if (tokenChange > 0n) outputs.push({ address: changeAddr.address, valueSatoshis: 1000n, token: { amount: tokenChange, category: hexToBin(opts.token_id) } });
 
     // Map inputs to signing shape
-    const recvAddrs = deriveReceivingAddresses(20);
-    const changeAddrs = deriveChangeAddresses(20);
+    const recvAddrs = deriveReceivingAddresses(scanCount('address_index'));
+    const changeAddrs = deriveChangeAddresses(scanCount('change_index'));
     const inputsForSigning = [];
     for (const u of bchIn.selected) {
       const recvIdx = recvAddrs.findIndex((a) => a.address === u.address);
