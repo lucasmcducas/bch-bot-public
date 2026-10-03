@@ -153,5 +153,62 @@ await test('omitting the amount opts out, so existing callers are unaffected', a
   assert(r.ok, `opting out should pass as before: ${JSON.stringify(r.problems)}`);
 });
 
+await test('a TOKEN receive output is checked on its token amount, not its sats', async () => {
+  // A CashToken output pays the dust floor (1000 sat) while carrying the real
+  // amount in its prefix. Verified against a live BCH -> PUSD build: the
+  // receive output had valueSatoshis 1000n and token.amount 182n, and the
+  // quote said 182. Comparing valueSatoshis rejected every correct token swap,
+  // so this pins the distinction in both directions.
+  const { createTokenOutput } = await import('../lib/tokens.mjs');
+  const CATEGORY = '2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544';
+  const input = {
+    tx_hash: 'ab90acba4e383b3cc4ba1d0d934568d04ce397610ebd0744dc7638e431733ce6',
+    tx_pos: 0,
+    valueSatoshis: 1_000_000n,
+    address: MINE,
+    hdNode,
+    account: 0,
+    change: 0,
+    index: 0,
+  };
+  const tokenOut = createTokenOutput({ address: MINE, category: CATEGORY, amount: 182n });
+  const { tx_hex } = await signP2pkhTransaction({
+    inputs: [input],
+    outputs: [
+      { address: MINE, valueSatoshis: tokenOut.valueSatoshis, token: tokenOut.token },
+      { address: CHANGE, valueSatoshis: 900_000n },
+    ],
+  });
+
+  const ok = await verifyTransactionOutputs(tx_hex, {
+    expectedReceiveAddresses: [MINE],
+    changeAddresses: [CHANGE],
+    maxFeeSats: 2000n,
+    expectedReceiveAmount: '182',
+    minReceiveAmount: '182',
+  });
+  assert(ok.ok, `a correct token swap was rejected: ${JSON.stringify(ok.problems)}`);
+
+  // And a token swap that delivers too few tokens is still caught.
+  const shortOut = createTokenOutput({ address: MINE, category: CATEGORY, amount: 1n });
+  const shortTx = await signP2pkhTransaction({
+    inputs: [input],
+    outputs: [
+      { address: MINE, valueSatoshis: shortOut.valueSatoshis, token: shortOut.token },
+      { address: CHANGE, valueSatoshis: 900_000n },
+    ],
+  });
+  const bad = await verifyTransactionOutputs(shortTx.tx_hex, {
+    expectedReceiveAddresses: [MINE],
+    changeAddresses: [CHANGE],
+    maxFeeSats: 2000n,
+    expectedReceiveAmount: '182',
+    minReceiveAmount: '182',
+  });
+  assert(!bad.ok, 'a token swap delivering 1 of 182 was accepted');
+  assert(/token base units/.test(JSON.stringify(bad.problems)),
+    `the refusal should name token units, got: ${JSON.stringify(bad.problems)}`);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

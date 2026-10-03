@@ -361,23 +361,35 @@ async function main() {
           if (typeof parent === 'string') { raw = candidate; break; }
         }
         if (typeof parent !== 'string') { stale.push({ i, raw: wireOrder, vout, why: 'parent unknown' }); continue; }
-        // Walk the parent to its output, then ask the node whether that output
-        // is still in the UTXO set via its scripthash.
-        const { createHash } = await import('node:crypto');
-        const bytes = Buffer.from(parent, 'hex');
-        let off = 4;
-        const nIn = bytes[off]; off += 1;
-        for (let k = 0; k < nIn; k++) { off += 36; const sl = bytes[off]; off += 1 + sl + 4; }
-        const nOut = bytes[off]; off += 1;
-        const locks = [];
-        for (let k = 0; k < nOut; k++) {
-          off += 8;
-          const sl = bytes[off]; off += 1;
-          locks.push(bytes.subarray(off, off + sl));
-          off += sl;
+        // Decode the parent with libauth instead of walking it by hand.
+        //
+        // The pool parent is 10,851 bytes with 57 inputs and 56 outputs, and the
+        // hand-rolled walk drifted: it returned the SAME wrong locking script
+        // for vout 4, 5 and 32, because the byte cursor slipped inside a
+        // CashToken prefix (0xef = PREFIX_TOKEN) rather than landing on an
+        // output boundary. Identical wrong bytes for different indices is the
+        // signature of a misaligned parse.
+        //
+        // It failed SILENTLY, which is what made it expensive. The wrong lock
+        // still hashes to a perfectly valid scripthash, and querying a valid
+        // scripthash for a script the node does not index legitimately returns
+        // an empty UTXO set -- so all 13 live pools came back "already spent".
+        //
+        // decodeTransactionBCH is already imported above for the unsigned tx,
+        // so this is strictly less code and one decoder instead of two.
+        let parentTx;
+        try {
+          parentTx = decodeTransactionBCH(hexToBin(parent));
+        } catch {
+          // Undecodable parent is a transport problem, not proof the pool is
+          // spent. Count it as unreadable so the caller reports it honestly
+          // instead of refusing or silently proceeding.
+          unreadable += 1;
+          continue;
         }
-        const lock = locks[vout];
-        if (!lock) { stale.push({ i, raw, vout, why: 'no such output' }); continue; }
+        const parentOutput = parentTx.outputs[vout];
+        if (!parentOutput) { unreadable += 1; continue; }
+        const lock = parentOutput.lockingBytecode;
         // Ask with cross-node confirmation. A single node answering
         // listunspent with an empty array does NOT mean the output is spent:
         // Fulcrum does not index p2sh32 covenant scripts and reports 0 unspent
