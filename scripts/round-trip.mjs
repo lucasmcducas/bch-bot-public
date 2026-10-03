@@ -24,6 +24,7 @@ import {
   loadHdNode,
   resolveAddressPath,
   newChangeAddress,
+  commitChangeAddress,
   deriveReceivingAddresses,
   deriveChangeAddresses,
 } from '../lib/wallet.mjs';
@@ -108,7 +109,8 @@ async function main() {
     const outputs = [{ address: recipientAddr, valueSatoshis: ROUND_TRIP_AMOUNT_SATS }];
 
     if (change >= DUST_THRESHOLD) {
-      const changeAddr = newChangeAddress();
+      const changeReservation = newChangeAddress(false);
+      const changeAddr = changeReservation.address;
       outputs.push({ address: changeAddr.address, valueSatoshis: change });
       console.log(`[3/6] recipient=${recipientAddr} (1000 sats)`);
       console.log(`       change  =${changeAddr.address} (${change} sats, change chain idx ${changeAddr.index})`);
@@ -150,7 +152,16 @@ async function main() {
     if (typeof result === 'string' && result.startsWith('Error')) {
       throw new Error(`broadcast rejected: ${result}`);
     }
-    console.log(`       broadcast response: ${result || '(empty — tx accepted)'}`);
+    // `{}` is a node's non-answer, not a success -- the same shape a
+    // protocol-version mismatch produces. Requiring the txid is what stops a
+    // rejected broadcast from being printed as "(empty -- tx accepted)".
+    const acceptedTxid = assertBroadcastAccepted(result, signed.tx_hash);
+    console.log(`       broadcast response: ${acceptedTxid}`);
+
+    // Confirmed by the node, so the change address is committed. Before this the
+    // increment happened at derivation, so a rejected round-trip still burned
+    // the address.
+    commitChangeAddress(changeReservation.index);
 
     // Step 6: poll for first confirmation
     console.log(`[6/6] waiting for first confirmation (target ~10 min)...`);

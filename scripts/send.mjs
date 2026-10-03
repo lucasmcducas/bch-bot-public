@@ -14,6 +14,7 @@ import {
   loadHdNode,
   resolveAddressPath,
   newChangeAddress,
+  commitChangeAddress,
   deriveReceivingAddresses,
   deriveChangeAddresses,
 } from '../lib/wallet.mjs';
@@ -129,7 +130,10 @@ async function main() {
 
     if (change >= DUST_THRESHOLD) {
       // Use a fresh change address from m/44'/145'/0'/1/i (the change chain).
-        const changeAddr = newChangeAddress();
+        // Derive without consuming: the increment is committed only after the
+        // broadcast is accepted, so a rejected run does not burn an address.
+        const changeReservation = newChangeAddress(false);
+        const changeAddr = changeReservation.address;
         outputs.push({ address: changeAddr.address, valueSatoshis: change });
         console.error(`change: ${change} sats -> ${changeAddr.address} (change chain index ${changeAddr.index})`);
       } else {
@@ -173,6 +177,8 @@ async function main() {
       throw new Error(`broadcast failed: ${result}`);
     }
     const acceptedTxid = assertBroadcastAccepted(result, signed.tx_hash);
+    // The node confirmed the txid, so the derived change address is now real.
+    commitChangeAddress(changeReservation.index);
     console.log(JSON.stringify({ ...outJson, broadcast: true, txid: acceptedTxid, server_response: result }, null, 2));
   } finally {
     await client.disconnect();

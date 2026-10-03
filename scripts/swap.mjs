@@ -21,7 +21,7 @@
 
 import { connect, scripthashForAddress, listUnspent, scriptHasUnspent,
 } from '../lib/network.mjs';
-import { loadWallet, loadHdNode, loadState, deriveReceivingAddresses, deriveChangeAddresses, newChangeAddress, deriveChildPrivKey } from '../lib/wallet.mjs';
+import { loadWallet, loadHdNode, loadState, deriveReceivingAddresses, deriveChangeAddresses, newChangeAddress, commitChangeAddress, deriveChildPrivKey } from '../lib/wallet.mjs';
 import { addressToLockingBytecode, signExternalTransaction } from '../lib/sign.mjs';
 import { binToHex } from '../lib/hex.mjs';
 import { quote, buildSwap, verifyBuildAgainstQuote, verifyTransactionOutputs, broadcastViaElectrum, broadcastSwap, resolveToken, bchToBaseUnits, toBaseUnits } from '../lib/router.mjs';
@@ -210,15 +210,16 @@ async function main() {
   );
 
   const receiveAddr = addrs[0].address;
-  // A dry run must not advance wallet state. newChangeAddress() derives the
-  // current change index, increments it, and writes state.json -- calling it
-  // here burned a change address on every dry run (observed: 10 -> 33 across
-  // ~23 runs). Derive the same address WITHOUT consuming it, and only move
-  // change_index when a broadcast is actually confirmed.
-  const isBroadcast = process.env.BCH_CONFIRM === 'yes';
-  const changeAddr = isBroadcast
-    ? newChangeAddress().address
-    : deriveChangeAddresses(loadState().change_index + 1).at(-1).address;
+  // Derive the change address WITHOUT consuming it. newChangeAddress() persists
+  // the increment on call, so calling it here burned addresses on every run that
+  // reached signing -- including runs the network then rejected. Observed: a
+  // swap rejected with "Missing inputs" advanced change_index by 5, and five
+  // such runs pushed it 40 -> 45.
+  //
+  // The address is derived, not reserved; the counter moves only after a
+  // broadcast is confirmed to have been accepted.
+  const changeReservation = newChangeAddress(false);
+  const changeAddr = changeReservation.address;
 
   console.error('[3/4] building the unsigned swap...');
   const build = await buildSwap({
@@ -504,6 +505,11 @@ async function main() {
   // `blockchain.transaction.broadcast` is how every other command in this repo
   // already broadcasts, and the mainnet servers accept token outputs.
   const txid = await broadcastSwapWithFallback(w.network, signed.txHex);
+  // Only now, with the node having confirmed the txid, is it safe to consume the
+  // change address. Deriving it is free; reserving it is the part that costs.
+  const newIndex = commitChangeAddress(changeReservation.index);
+  console.error(`   change address ${changeReservation.index} committed (change_index=${newIndex})`);
+
   console.log(JSON.stringify({ ...out, dry_run: false, broadcast: true, txid }, null, 2));
 }
 

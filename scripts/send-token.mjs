@@ -19,6 +19,7 @@ import {
   deriveReceivingAddresses,
   deriveChangeAddresses,
   newChangeAddress,
+  commitChangeAddress,
   resolveAddressPath,
 } from '../lib/wallet.mjs';
 import { signP2pkhTransaction } from '../lib/sign.mjs';
@@ -186,12 +187,16 @@ async function main() {
     console.error(`   ${rawInputs.length} input(s): FT sum=${ftTotal} (${ftSatsIn} sats), BCH sum=${bchTotal}`);
 
     // Build all outputs: [recipient FT/NFT, change-FT (if any excess), BCH change]
+    // Change addresses are DERIVED here but only reserved (committed) once the
+    // node confirms the broadcast, so a rejected run does not burn indices.
+    let ftChangeAddr = null;
+    let bchChangeAddr = null;
     const outputs = [recipientTokenOutput];
 
     // FT change: if we over-selected FT inputs, send excess back to a change address
     const excessFt = ftTotal - requestedAmount;
     if (excessFt > 0n) {
-      const ftChangeAddr = newChangeAddress();
+      ftChangeAddr = newChangeAddress(false);
       const ftChange = createTokenOutput({
         address: ftChangeAddr.address,
         category: targetCat,
@@ -229,7 +234,7 @@ async function main() {
       process.exit(1);
     }
     if (bchChange >= DUST_THRESHOLD) {
-      const bchChangeAddr = newChangeAddress();
+      bchChangeAddr = newChangeAddress(false);
       outputs.push({
         lockingBytecode: undefined, // set by signP2pkhTransaction via outputToLibauth
         address: bchChangeAddr.address,
@@ -289,6 +294,11 @@ async function main() {
     // A node that rejects can answer `{}` rather than an error, and the old
     // message here printed that as '(empty -- tx accepted)'. Require the txid.
     const acceptedTxid = assertBroadcastAccepted(result, signed.tx_hash);
+    // Confirmed by the node. Commit whichever change addresses were used; the
+    // call is idempotent and takes the highest index, so passing both is safe.
+    for (const a of [ftChangeReservation, bchChangeReservation]) {
+      if (a) commitChangeAddress(a.index);
+    }
     console.error(`   broadcast response: ${acceptedTxid}`);
     console.error('[7/7] broadcast complete. check the explorer for confirmation:');
     console.error(`   https://bchexplorer.cash/tx/${signed.tx_hash}`);

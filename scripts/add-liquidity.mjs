@@ -36,6 +36,7 @@ import {
   deriveReceivingAddresses,
   deriveChangeAddresses,
   newChangeAddress,
+  commitChangeAddress,
 } from '../lib/wallet.mjs';
 import { signP2pkhTransaction } from '../lib/sign.mjs';
 import { secp256k1, hash160 } from '@bitauth/libauth'
@@ -206,7 +207,8 @@ async function main() {
     const fee = estSize * feeRateSatPerByte;
     const bchChange = bchIn.total - bchSats - fee;
     const tokenChange = tokenIn.total - tokenAmt;
-    const changeAddr = newChangeAddress();
+    const changeReservation = newChangeAddress(false);
+    const changeAddr = changeReservation.address;
 
     if (bchChange < 0n) { console.error('✗ BCH change negative'); process.exit(1); }
 
@@ -270,6 +272,8 @@ async function main() {
     }
     // `{}` is a node's non-answer, not a success. Require the txid.
     const acceptedTxid = assertBroadcastAccepted(result, signed.tx_hash);
+    // Confirmed by the node, so the change address is committed.
+    commitChangeAddress(changeReservation.index);
     console.error(`   broadcast response: ${result}`);
     console.log(JSON.stringify({ tx_hash: acceptedTxid, broadcast: true, server_response: result }, null, 2));
   } finally {

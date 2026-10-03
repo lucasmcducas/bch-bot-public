@@ -23,6 +23,7 @@ import {
   deriveReceivingAddresses,
   deriveChangeAddresses,
   newChangeAddress,
+  commitChangeAddress,
 } from '../lib/wallet.mjs'
 import { signP2pkhTransaction } from '../lib/sign.mjs';
 
@@ -139,7 +140,8 @@ async function main() {
     console.error(`   expected change output: ${expectedChange} sat`);
 
     // Build the change address (fresh)
-    const changeAddr = newChangeAddress();
+    const changeReservation = newChangeAddress(false);
+    const changeAddr = changeReservation.address;
     console.error('[3/4] building + signing sweep tx...');
 
     // Map candidates to signing inputs (need hdNode + derivation path)
@@ -185,6 +187,8 @@ async function main() {
     }
     // `{}` is a node's non-answer, not a success. Require the txid.
     const acceptedTxid = assertBroadcastAccepted(result, signed.tx_hash);
+    // Confirmed by the node, so the change address is committed.
+    commitChangeAddress(changeReservation.index);
     console.error(`   broadcast response: ${result || '(empty — tx accepted)'}`);
     console.log(JSON.stringify({
       tx_hash: signed.tx_hash,
