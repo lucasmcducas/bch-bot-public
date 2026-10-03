@@ -27,7 +27,7 @@
 //      (BCH + token) and constructs pool output with combined reserves.
 //      NOT YET IMPLEMENTED — Phase 4 follow-up.
 
-import { connect, scripthashForAddress, listUnspent,
+import { connect, scripthashForAddress, listUnspent, assertBroadcastAccepted,
 } from '../lib/network.mjs';
 import { connectCauldronRostrum, fetchPools } from '../lib/cauldron.mjs';
 import {
@@ -268,8 +268,10 @@ async function main() {
     if (typeof result === 'string' && result.startsWith('Error')) {
       throw new Error(`broadcast rejected: ${result}`);
     }
+    // `{}` is a node's non-answer, not a success. Require the txid.
+    const acceptedTxid = assertBroadcastAccepted(result, signed.tx_hash);
     console.error(`   broadcast response: ${result}`);
-    console.log(JSON.stringify({ tx_hash: signed.tx_hash, broadcast: true, server_response: result }, null, 2));
+    console.log(JSON.stringify({ tx_hash: acceptedTxid, broadcast: true, server_response: result }, null, 2));
   } finally {
     await client.disconnect();
     await cauldronClient.disconnect();

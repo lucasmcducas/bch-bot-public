@@ -15,7 +15,7 @@
 //   - NEVER sweeps UTXOs that hold tokens: spending the UTXO consumes the token
 //     with it. Skipped token UTXOs are reported, and need send-token instead.
 
-import { connect, scripthashForAddress, listUnspent,
+import { connect, scripthashForAddress, listUnspent, assertBroadcastAccepted,
 } from '../lib/network.mjs';
 import {
   loadWallet,
@@ -183,10 +183,13 @@ async function main() {
     if (typeof result === 'string' && result.startsWith('Error')) {
       throw new Error(`broadcast rejected: ${result}`);
     }
+    // `{}` is a node's non-answer, not a success. Require the txid.
+    const acceptedTxid = assertBroadcastAccepted(result, signed.tx_hash);
     console.error(`   broadcast response: ${result || '(empty — tx accepted)'}`);
     console.log(JSON.stringify({
       tx_hash: signed.tx_hash,
       broadcast: true,
+      txid: acceptedTxid,
       server_response: result,
       swept_utxos: candidates.length,
     }, null, 2));

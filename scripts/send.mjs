@@ -7,7 +7,7 @@
 // SAFETY: broadcasts a real transaction on mainnet if wallet is mainnet.
 //   Set BCH_CONFIRM=yes env var to actually broadcast (moth convention).
 
-import { connect, scripthashForAddress, listUnspent,
+import { connect, scripthashForAddress, listUnspent, assertBroadcastAccepted,
 } from '../lib/network.mjs';
 import {
   loadWallet,
@@ -172,7 +172,8 @@ async function main() {
     if (typeof result === 'string' && result.startsWith('Error')) {
       throw new Error(`broadcast failed: ${result}`);
     }
-    console.log(JSON.stringify({ ...outJson, broadcast: true, server_response: result }, null, 2));
+    const acceptedTxid = assertBroadcastAccepted(result, signed.tx_hash);
+    console.log(JSON.stringify({ ...outJson, broadcast: true, txid: acceptedTxid, server_response: result }, null, 2));
   } finally {
     await client.disconnect();
   }

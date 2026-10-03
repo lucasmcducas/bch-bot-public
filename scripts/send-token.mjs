@@ -11,7 +11,7 @@
 // Pattern from Selene Wallet TransactionBuilderService.buildP2pkhTransaction
 // (gitlab.com/selene.cash/selene-wallet) + Moth's CLI script shape.
 
-import { connect, scripthashForAddress, listUnspent,
+import { connect, scripthashForAddress, listUnspent, assertBroadcastAccepted,
 } from '../lib/network.mjs';
 import {
   loadWallet,
@@ -286,12 +286,16 @@ async function main() {
     if (typeof result === 'string' && result.startsWith('Error')) {
       throw new Error(`broadcast rejected: ${result}`);
     }
-    console.error(`   broadcast response: ${result || '(empty — tx accepted)'}`);
+    // A node that rejects can answer `{}` rather than an error, and the old
+    // message here printed that as '(empty -- tx accepted)'. Require the txid.
+    const acceptedTxid = assertBroadcastAccepted(result, signed.tx_hash);
+    console.error(`   broadcast response: ${acceptedTxid}`);
     console.error('[7/7] broadcast complete. check the explorer for confirmation:');
     console.error(`   https://bchexplorer.cash/tx/${signed.tx_hash}`);
     console.log(JSON.stringify({
       tx_hash: signed.tx_hash,
       broadcast: true,
+      txid: acceptedTxid,
       server_response: result,
     }, null, 2));
   } finally {
