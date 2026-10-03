@@ -39,19 +39,50 @@ const execFileAsync = promisify(execFile);
 
 const APP = 'https://app.cauldron.quest/swap';
 
-/** Open a URL in the desktop's browser. Order matters: xdg-open first on Linux. */
+// The one place a URL crosses into another process.
+//
+//   - the URL is built from a constant host and a hex-validated category, so it
+//     is fully determined by this file; nothing user-supplied reaches it
+//   - every candidate is execFile with an argument ARRAY, never a shell string,
+//     so there is no shell to inject into and no word splitting
+//   - only these five programs are ever invoked. Nothing is resolved from PATH
+//     based on input, and no "open with whatever handles this scheme" fallback
+//     is used, because that turns a validated URL into an arbitrary handler
+//   - env is passed explicitly with a minimal PATH, so a poisoned environment
+//     cannot substitute a different xdg-open
+const BROWSERS = [
+  ['xdg-open', []],
+  ['gio', ['open']],
+  ['gnome-open', []],
+  ['firefox', []],
+  ['chromium', []],
+];
+
+const SAFE_URL = /^https:\/\/[a-z0-9.-]+\/swap\/[0-9a-f]{64}\/?$/i;
+
 async function openBrowser(url) {
-  const attempts = [
-    ['xdg-open', [url]],
-    ['gio', ['open', url]],
-    ['gnome-open', [url]],
-    ['xdg-open', ['--', url]],
-    ['sensible-browser', [url]],
-  ];
+  if (!SAFE_URL.test(url)) {
+    // Refuse to hand anything to a subprocess that is not provably the URL we
+    // built. If this ever fires, the URL construction above has a bug.
+    return { opened: false, via: null, tried: ['refused: URL did not match the expected shape'] };
+  }
+
   const tried = [];
-  for (const [cmd, args] of attempts) {
+  for (const [cmd, prefix] of BROWSERS) {
     try {
-      await execFileAsync(cmd, args, { timeout: 10000 });
+      await execFileAsync(cmd, [...prefix, '--', url], {
+        timeout: 10000,
+        // A minimal environment: PATH for the binary, HOME for the desktop
+        // session, and the display variables a browser needs to appear.
+        env: {
+          PATH: '/usr/bin:/bin:/usr/local/bin',
+          HOME: process.env.HOME ?? '',
+          DISPLAY: process.env.DISPLAY ?? '',
+          WAYLAND_DISPLAY: process.env.WAYLAND_DISPLAY ?? '',
+          XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR ?? '',
+          XDG_SESSION_TYPE: process.env.XDG_SESSION_TYPE ?? '',
+        },
+      });
       return { opened: true, via: cmd };
     } catch (e) {
       tried.push(`${cmd}: ${String(e.message).split('\n')[0].slice(0, 60)}`);
@@ -111,21 +142,31 @@ if (buy.toLowerCase() === NATIVE) {
   process.exit(1);
 }
 
+// Validate the category the moment we have it, and never echo an invalid one.
+// resolveToken reads a local registry, so this is defence in depth rather than a
+// live attack -- but a category id is interpolated into a URL that is then
+// handed to an external program, and "validate before use" is cheaper than
+// reasoning about whether the registry is trustworthy.
+const CATEGORY = /^[0-9a-f]{64}$/i;
+
 let category;
 let symbol;
 try {
   const token = await resolveToken(buy);
-  category = token.categoryId;
-  symbol = token.symbol;
-} catch (e) {
-  console.error(`swap-open: cannot resolve "${buy}": ${e.message}`);
+  category = typeof token.categoryId === 'string' ? token.categoryId : '';
+  symbol = typeof token.symbol === 'string' ? token.symbol : '';
+} catch {
+  // Deliberately does not print e.message: it can contain registry content we
+  // have not validated, and this writes to a terminal.
+  console.error(`swap-open: cannot resolve the buy token.`);
   console.error('          pass a 64-character category id, e.g.');
   console.error('            swap-open.mjs BCH 2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544');
   process.exit(1);
 }
 
-if (!category || !/^[0-9a-f]{64}$/i.test(category)) {
-  console.error(`swap-open: "${buy}" resolved to an unusable category: ${category}`);
+if (!CATEGORY.test(category)) {
+  // Do not print the offending value.
+  console.error('swap-open: the buy token did not resolve to a 64-character category id.');
   process.exit(1);
 }
 
