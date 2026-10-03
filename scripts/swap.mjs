@@ -383,7 +383,6 @@ async function runAttempt(attempt = 1) {
             .catch(() => null);
           if (typeof parent === 'string') { raw = candidate; break; }
         }
-          stale.push({ i, raw, vout, why: 'outpoint not in the unspent set' });
         // Decode the parent with libauth instead of walking it by hand.
         //
         // The pool parent is 10,851 bytes with 57 inputs and 56 outputs, and the
@@ -458,7 +457,14 @@ async function runAttempt(attempt = 1) {
       for (const x of stale.slice(0, 5)) {
         console.error(`      input ${x.i}: ${x.raw?.slice(0, 16)}.. v${x.vout}  ${x.why}`);
       }
-      throw new Error('router returned a route whose pool inputs are all spent');
+      console.error('');
+      console.error('The router served pool state that a competing swap has already');
+      console.error('consumed. This is the normal condition on a busy pool, not a');
+      console.error('malformed transaction: retry to be quoted against fresh pools.');
+      // Exit rather than throw: this is the same refusal as the partial-stale
+      // branch below, and a throw fell through to it, printing the list twice
+      // and reporting "24 of 24" for a 12-input transaction.
+      process.exit(4);
     } else if (unreadable === poolInputCount) {
       // Every pool input could not be read. That IS a transport problem (this
       // node answered null to every blockchain.transaction.get during the check),

@@ -18,6 +18,24 @@
 // "Missing inputs" is routinely misread as "the node cannot handle covenants",
 // which sends you off to rebuild the transaction when the route is simply dead.
 //
+// These two tests need a real signed swap as a fixture, because the property
+// they check (the re-creation rule, and whether a router's chosen outpoints are
+// still live) only means anything against a transaction the router actually
+// built. There is no synthetic substitute: a hand-written transaction would
+// pass or fail for reasons of its own construction rather than the rule.
+//
+// The fixture is NOT in the repo -- it is a few KB of signed hex whose pool
+// inputs are consumed within seconds of being built, so committing one would
+// freeze a snapshot that is dead on arrival. Instead:
+//
+//   node scripts/swap.mjs BCH pusd 0.001          # dry-run, prints the build
+//   node scripts/test-cauldron-k-invariant.mjs <path-to-hex>
+//   node scripts/test-swap-prevout-liveness.mjs <path-to-hex>
+//
+// They are deliberately NOT wired into `npm test`, which must stay runnable
+// offline and without a wallet. A test that needs mainnet state to answer
+// belongs in a manual gate, not in a suite that anyone trusts to be green.
+//
 // Usage:  node scripts/test-swap-prevout-liveness.mjs [tx-hex-file]
 import { readFileSync } from 'fs';
 import { createHash } from 'crypto';
@@ -34,7 +52,12 @@ const check = (name, cond, detail = '') => {
 const path = process.argv[2] || '/tmp/tx.hex';
 let hex;
 try { hex = readFileSync(path, 'utf8').trim(); }
-catch { console.log(`cannot read ${path}`); process.exit(1); }
+catch {
+  console.error(`no transaction fixture at ${path}`);
+  console.error('build one:  node scripts/swap.mjs BCH pusd 0.001');
+  console.error('then pass the hex file:  ' + process.argv[1] + ' <file>');
+  process.exit(1);
+}
 
 const tx = decodeTransactionBCH(hexToBin(hex));
 const c = await connectToken('mainnet');
