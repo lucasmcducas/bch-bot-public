@@ -19,7 +19,7 @@
 // builds the unsigned transaction and names the inputs we own; we sign only
 // those and broadcast. See lib/router.mjs.
 
-import { connect, scripthashForAddress, listUnspent,
+import { connect, scripthashForAddress, listUnspent, scriptHasUnspent,
 } from '../lib/network.mjs';
 import { loadWallet, loadHdNode, loadState, deriveReceivingAddresses, deriveChangeAddresses, newChangeAddress, deriveChildPrivKey } from '../lib/wallet.mjs';
 import { addressToLockingBytecode, signExternalTransaction } from '../lib/sign.mjs';
@@ -249,6 +249,12 @@ async function main() {
   // leaving the wallet, not satoshis.
   const outputCheck = await verifyTransactionOutputs(build.unsignedTxHex, {
     expectedReceiveAddresses: [receiveAddr],
+    // The amount the quote promised, and the floor the user set. Without
+    // these the gate proves the money is going to our address but never that
+    // the right AMOUNT arrives, which is the one thing a hostile router can
+    // change while keeping every ownership check happy.
+    expectedReceiveAmount: q.outputAmount,
+    minReceiveAmount: minOutput || q.outputAmount,
     changeAddresses: [changeAddr],
     maxFeeSats: routerFeeCeiling(build),
     // A BCH -> PUSD swap has no token outputs (it sells plain BCH). A
@@ -327,6 +333,7 @@ async function main() {
   {
     const checkClient = await connect(w.network);
     const stale = [];
+    let unreadable = 0;
     try {
       for (let i = 0; i < builtInputs.length; i++) {
         if (fundingForInput.has(i)) continue;          // ours; already verified above
@@ -343,7 +350,13 @@ async function main() {
         let parent = null;
         let raw = null;
         for (const candidate of [wireOrder, displayOrder]) {
-          parent = await checkClient.request('blockchain.transaction.get', [candidate, false])
+          // `request` is VARIADIC, not array-taking: passing [candidate, false]
+          // puts [[candidate, false]] on the wire and the node answers {},
+          // which is indistinguishable from 'no such transaction'. That made
+          // every one of the 15 pool inputs read as 'parent unknown' and
+          // disabled the stale-pool safety check, on a pool transaction that
+          // demonstrably exists (verified by both byte orders on two nodes).
+          parent = await checkClient.request('blockchain.transaction.get', candidate, false)
             .catch(() => null);
           if (typeof parent === 'string') { raw = candidate; break; }
         }
@@ -365,17 +378,34 @@ async function main() {
         }
         const lock = locks[vout];
         if (!lock) { stale.push({ i, raw, vout, why: 'no such output' }); continue; }
-        const sh = createHash('sha256').update(lock).digest().reverse().toString('hex');
-        const unspent = await checkClient.request('blockchain.scripthash.listunspent', sh)
-          .catch(() => null);
-        if (Array.isArray(unspent) && unspent.length === 0) {
-          stale.push({ i, raw, vout, why: 'already spent' });
+        // Ask with cross-node confirmation. A single node answering
+        // listunspent with an empty array does NOT mean the output is spent:
+        // Fulcrum does not index p2sh32 covenant scripts and reports 0 unspent
+        // and 0 confirmed for every live Cauldron pool. Measured on all 13 pool
+        // covenants of a real quote: Rostrum saw 1..60 unspent each, Fulcrum saw
+        // none, and 13 of 13 disagreed. Reading the empty answer as
+        // 'already spent' would refuse a perfectly good swap.
+        const verdict = await scriptHasUnspent(Buffer.from(lock).toString('hex'), {
+          network: w.network,
+          client: checkClient,
+        });
+        if (verdict === 'spent') {
+          stale.push({ i, raw, vout, why: 'already spent (confirmed by two nodes)' });
+        } else if (verdict === 'inconclusive') {
+          unreadable += 1;
         }
       }
     } finally {
       await checkClient.disconnect();
     }
-    if (stale.length === builtInputs.length - fundingForInput.size) {
+    const poolInputCount = builtInputs.length - fundingForInput.size;
+    if (unreadable) {
+      console.error(`      note: ${unreadable} of ${poolInputCount} pool input(s) unreadable from any node;`);
+      console.error('            treating as unproven rather than spent.');
+    }
+    if (stale.length === 0 && unreadable < poolInputCount) {
+      console.error(`      pool inputs verified unspent (${poolInputCount - unreadable}/${poolInputCount})`);
+    } else if (stale.length === poolInputCount) {
       // Every pool input failed to read. That is a transport problem (this node
       // answered {} to every blockchain.transaction.get during the check), not
       // evidence that the pools are spent. Say so, and let the caller proceed to

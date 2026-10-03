@@ -19,7 +19,14 @@
 
 import { connect, scripthashForAddress, listUnspent,
 } from '../lib/network.mjs';
-import { loadWallet, loadHdNode, resolveAddressPath, newChangeAddress } from '../lib/wallet.mjs';
+import {
+  loadWallet,
+  loadHdNode,
+  resolveAddressPath,
+  newChangeAddress,
+  deriveReceivingAddresses,
+  deriveChangeAddresses,
+} from '../lib/wallet.mjs';
 import { signP2pkhTransaction } from '../lib/sign.mjs';
 
 const ROUND_TRIP_AMOUNT_SATS = 1000n;
