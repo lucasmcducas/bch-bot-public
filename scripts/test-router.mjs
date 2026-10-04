@@ -13,7 +13,7 @@
 // The live tier at the bottom is opt-in: it talks to the real Riften router and
 // only asserts the contract shape, not prices, which move.
 
-import { bchToBaseUnits, baseUnitsToBch, toBaseUnits } from '../lib/router.mjs';
+import { bchToBaseUnits, baseUnitsToBch } from '../lib/router.mjs';
 
 let passed = 0;
 let failed = 0;

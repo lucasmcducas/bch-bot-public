@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// scripts/swap.mjs — swap BCH or a CashToken on Cauldron, via the Riften Router.
+// scripts/swap.mjs — swap BCH or a CashToken on Cauldron, in-wallet.
 //
 // Usage:
 //   node scripts/swap.mjs <sell> <buy> <amount>                    # dry-run
@@ -10,71 +10,130 @@
 //   node scripts/swap.mjs pusd BCH 1.50        # sell 1.50 PUSD, receive BCH
 //   node scripts/swap.mjs BCH pusd 0.01 --quote-only
 //
-//   THIS PATH IS CURRENTLY REJECTED BY THE NETWORK. The transaction built here
-//   is correct -- it satisfies both rules in Riften's specification, and the
-//   k-invariant holds -- but the router names a pool parent, fd02de7d..1138,
-//   whose 56 outputs are all spent, and it names the same one on every quote.
-//   38 of the 39 covenant locks inside that dead parent still hold live
-//   positions, so the liquidity is real and the position has simply moved; the
-//   position is spent because the pool traded through it, not because the pool
-//   is gone. The router's transaction is fully assembled, so re-pointing its
-//   inputs means re-deriving their constant-product math, which is a
-//   reimplementation of the AMM rather than a fix.
-//
-//   Use `swap-open.mjs` to trade through the Cauldron app instead, which is
-//   what the reference wallet does. See docs-swap-architecture.md.
-//
-
-//
 // <sell>/<buy> accept a symbol (pusd, roach) or a 64-char category hex; 'bch'
 // is native. A BCH amount is in display units (8 dp); a token amount is in base
-// units, because the router's protocol is integer base units throughout.
+// units, because the protocol is integer base units throughout.
 //
-// A Cauldron pool input must be signed by the pool operator, so this wallet
-// cannot assemble a swap alone. The Router (Riften Labs, the DEX operator)
-// builds the unsigned transaction and names the inputs we own; we sign only
-// those and broadcast. See lib/router.mjs.
+// WHAT CHANGED, AND WHY
+//
+// This used to hand the transaction to router.riften.net, which assembled it
+// server-side and named the pool inputs. It named parent fd02de7d..1138, whose
+// 56 outputs are all spent, and it named the same one on every quote -- so the
+// network rejected every swap with "Missing inputs", an error that reads like a
+// malformed transaction and is not one. The liquidity was real; only the
+// position had moved. Re-pointing the router's inputs would have meant
+// reimplementing the constant-product math, which is a rewrite rather than a
+// fix.
+//
+// It is now assembled locally with @cashlab/cauldron (ExchangeLab) from pool
+// state read off the public indexer. That is how Paytaca, the reference wallet
+// for this protocol, does its own swaps. See lib/exlab-swap.mjs.
+//
+// BECAUSE THE BUILD IS LOCAL, three chunks of the old file are gone rather than
+// moved, and it is worth being explicit about why each is not simply missing:
+//
+//   * the router's inputsToSign indirection. It named which of ITS inputs were
+//     ours, by index into a transaction mixing our inputs with 27 pool inputs. A
+//     live dry-run returned [12, 13] against 2 funding UTXOs, and the lookup in
+//     `funding` produced "no funding UTXO supplied for input 12" -- an error
+//     naming an input that cannot exist, which is the tell that two index spaces
+//     were being conflated. Locally we pass our own coins and the SDK places
+//     them, so the two index spaces never meet.
+//   * the stale-pool pre-check across two nodes. It existed to catch pool
+//     inputs the router had already lost before we signed. We build from the
+//     indexer's live list seconds earlier, and a competing swap now costs a
+//     retry rather than a signature and a fee. That check was also, notably, the
+//     only place the codebase handled "a node cannot read p2sh32 covenants",
+//     and it handled it by refusing to conclude -- which is still right, and now
+//     lives in lib/network.mjs outpointIsUnspent.
+//   * verifyTransactionOutputs and routerFeeCeiling. Both asked whether a
+//     SERVER-ASSEMBLED transaction paid us correctly. See lib/exlab-swap.mjs for
+//     why that is not a safety net worth keeping, and for what replaced the part
+//     of it that was genuinely valuable.
+//
+// WHAT IS KEPT, AND IS STILL LOAD-BEARING
+//
+//   * the funding filter. Plain BCH is always offered as coin, and token UTXOs
+//     only when they match the sell side. Conflating those makes a token swap
+//     unfundable: a token UTXO carries dust-level sats, nowhere near the miner
+//     fee, so the router rejected the set with "insufficient_funds: inputs 14188
+//     sats cannot cover outputs 13184 + miner fee 1173" while 801,000 sats of
+//     plain BCH the wallet actually held were never offered.
+//   * scanning change addresses, and deriving the window from the wallet's own
+//     counters. A fixed limit of 20 made the coin at change index 38 invisible,
+//     and it fails SILENTLY, because a scan that finds little reports "not enough
+//     funds" rather than "looked in the wrong place". On this wallet 856,855 of
+//     1,657,855 sat sat on a change address.
+//   * the FULL derivation path when spending. Passing change=0 unconditionally
+//     signed a change-chain UTXO with the receiving-chain key for the same
+//     index -- /0/19 instead of /1/19 -- and the failure surfaces as a
+//     "Missing inputs"-style rejection that reads like a malformed transaction.
+//     It stayed hidden because the scan only reached change index 19 while
+//     change_index was 40, so every change UTXO the swap could see happened to
+//     be on the receiving chain. That is a coincidence of current state, not a
+//     property of the code, and it breaks the first time a swap is funded from
+//     a change address. Here the chain travels with the UTXO from the scan.
+//   * the change address is DERIVED, never reserved. newChangeAddress()
+//     increments on call, so committing early burned an address on every run
+//     that reached signing -- including runs the network then rejected. One
+//     "Missing inputs" run advanced change_index by 5, and five pushed it 40->45.
+//   * the retry, and its bound. Cauldron pools are shared state; a competing
+//     swap can consume the exact inputs we picked mid-flight. Measured 2026-10-02
+//     on a swap that passed every local gate.
+//
+// THE SIGNING MODEL IS DIFFERENT, AND IT IS WHY THIS FILE IS SHORT
+//
+// The SDK takes our p2pkh input as a SpendableCoin carrying coin.key -- a
+// PRIVATE key -- under a compiler entry named user_key. It unlocks the pool
+// covenants itself and signs our input with the key we hand it. createTradeTx
+// returns a COMPLETE, SIGNED transaction: no signTransaction, no finalize step,
+// no signExternalTransaction call anywhere in this path.
+//
+// Verified rather than inferred, by building with a throwaway key and reading the
+// unlocking bytecode: 69-byte covenant unlocks on the pool inputs, a 65-byte DER
+// signature push on ours.
+//
+// So private keys are handed to a third-party library. Three things bound that,
+// and all three are load-bearing:
+//   1. the key passed is the CHILD key for the one address holding that UTXO, so
+//      a mishandled key leaks one input, never the seed;
+//   2. no key is loaded until --quote-only has already returned, so the quote
+//      path touches no key material at all;
+//   3. nothing moves without BCH_CONFIRM=yes, so even a hostile library cannot
+//      broadcast without a human setting an environment variable.
+// Read lib/exlab-swap.mjs before changing any of those.
 
-import { connect, scripthashForAddress, listUnspent,
-  outpointIsUnspent, connectToken,
- } from '../lib/network.mjs';
+import { connect, scripthashForAddress, listUnspent, broadcastViaElectrum } from '../lib/network.mjs';
 import { loadWallet, loadHdNode, loadState, deriveReceivingAddresses,
-  scanCount, deriveChangeAddresses, newChangeAddress, commitChangeAddress, deriveChildPrivKey } from '../lib/wallet.mjs';
-import { addressToLockingBytecode, signExternalTransaction } from '../lib/sign.mjs';
-import { binToHex } from '../lib/hex.mjs';
-import { quote, buildSwap, verifyBuildAgainstQuote, verifyTransactionOutputs, broadcastViaElectrum, broadcastSwap, resolveToken, bchToBaseUnits, toBaseUnits } from '../lib/router.mjs';
+  scanCount, deriveChangeAddresses, newChangeAddress, commitChangeAddress,
+  deriveChildPrivKey } from '../lib/wallet.mjs';
+import { bchToBaseUnits, toBaseUnits, resolveToken } from '../lib/router.mjs';
+import {
+  fetchPools, quoteSwap, buildSwap, verifyAgainstQuote, SpendableCoinType,
+} from '../lib/exlab-swap.mjs';
+import { addressToLockingBytecode } from '../lib/sign.mjs';
 
-// The largest "output to an address we do not control" we are willing to accept.
+// The largest "output to an address we do not control" we will accept.
 //
-// The router charges its fee on the build, and reports it as build.feeSats, so
-// the ceiling is derived from what the build actually said rather than from a
-// hardcoded bps rate that could drift from the router. The ceiling is the
-// reported fee with generous headroom for the miner fee, doubled to allow for
-// a multi-output trade.
+// A locally built swap has no router fee to reason about: receive and change are
+// both ours, so a well-formed swap has NO foreign output at all. The ceiling is
+// therefore zero -- and it is never null. The router version returned null when a
+// build reported no usable fee, which made the check skip the ceiling entirely
+// and accept an unexplained output unexamined, failing open on exactly the case
+// it exists for.
+const FOREIGN_OUTPUT_CEILING = 0n;
+
+// Cauldron pool UTXOs are shared state. A competing swap can consume the exact
+// inputs we selected while we are still building, and the node then rejects our
+// perfectly valid signed transaction with "Missing inputs" -- measured
+// 2026-10-02 on a swap that passed every local gate.
 //
-// This NEVER returns null. An earlier version returned null when the build
-// reported no usable fee, which made verifyTransactionOutputs skip the ceiling
-// check entirely and accept an unexplained output unexamined -- failing open on
-// exactly the case the check exists for. If the build gives us no fee to work
-// from, the honest response is a ceiling of zero: no unexplained output is
-// acceptable, and the caller's own build must then have no foreign outputs.
-//
-// A ceiling of zero is not merely safe, it is correct here: the receive and
-// change outputs are both ours, so a well-formed swap has no foreign output at
-// all. The headroom below only matters if the router ever starts paying itself
-// out of band.
-function routerFeeCeiling(build) {
-  const reported = build && build.feeSats !== undefined && build.feeSats !== null
-    ? BigInt(build.feeSats)
-    : null;
-  if (reported === null || reported <= 0n) return 0n;
-  // A floor of 1000 sats covers the miner fee on a typical trade; the reported
-  // router fee is added on top, then doubled. Erring high is safe because a
-  // redirected output carries the whole traded amount, not a fee-sized sum, and
-  // is caught at every trade size.
-  const minerAllowance = 1000n;
-  return (reported + minerAllowance) * 2n;
-}
+// Retrying the same bytes is guaranteed to fail; they name inputs that are gone.
+// So a retry re-runs the WHOLE attempt against fresh pool state. Bounded, because
+// each attempt costs a quote and can move the price against the user: three is
+// enough to ride out a contended block, and past that the pool is not for us
+// right now.
+const MAX_ATTEMPTS = Number(process.env.BCH_SWAP_ATTEMPTS || 3);
 
 function parseArgs() {
   const argv = process.argv.slice(2);
@@ -88,9 +147,8 @@ function parseArgs() {
   const quoteOnly = argv.includes('--quote-only');
   const minIdx = argv.indexOf('--min-output');
   const minOutput = minIdx !== -1 ? argv[minIdx + 1] : null;
-  // minIdx + 1 is 0 when the flag is absent, which would silently drop the
-  // first positional argument -- so the skip set is only built when the flag
-  // is actually present.
+  // minIdx + 1 is 0 when the flag is absent, which would silently drop the first
+  // positional argument -- so the skip set is only built when the flag is there.
   const skip = new Set(minIdx === -1 ? [] : [minIdx, minIdx + 1]);
   const positional = argv.filter((a, i) => !a.startsWith('--') && !skip.has(i));
   if (positional.length < 3) {
@@ -109,9 +167,9 @@ function displayAmount(baseUnits, decimals) {
   return `${v / div}.${(v % div).toString().padStart(d, '0')}`;
 }
 
-// One full attempt: quote, fund, build, verify, sign, broadcast. Everything in
-// here can be invalidated by another trader between any two steps, so a retry
-// must re-run ALL of it -- never resume partway.
+// One full attempt: quote, fund, build, verify, broadcast. Everything in here can
+// be invalidated by another trader between any two steps, so a retry must re-run
+// ALL of it -- never resume partway.
 async function runAttempt(attempt = 1) {
   const { sell: sellArg, buy: buyArg, amount: amountArg, quoteOnly, minOutput } = parseArgs();
 
@@ -121,10 +179,10 @@ async function runAttempt(attempt = 1) {
     process.exit(1);
   }
 
-  // The router's protocol is integer base units throughout, so a user-facing
-  // amount has to be scaled by the asset's decimals. BCH is always 8; a token
-  // amount is scaled by whatever the indexer reports, and an unknown decimal
-  // count means we cannot safely guess a scale.
+  // The protocol is integer base units throughout, so a user-facing amount has to
+  // be scaled by the asset's decimals. BCH is always 8; a token amount is scaled
+  // by whatever the indexer reports, and an unknown decimal count means we
+  // cannot safely guess a scale.
   let amountBase;
   if (sellTok.categoryId === 'bch') {
     amountBase = bchToBaseUnits(amountArg);
@@ -135,43 +193,54 @@ async function runAttempt(attempt = 1) {
   } else {
     amountBase = toBaseUnits(amountArg, Number(sellTok.decimals));
   }
+  const outDecimals = buyTok.categoryId === 'bch' ? 8 : buyTok.decimals;
   console.error(`swap: ${displayAmount(amountBase, sellTok.decimals)} ${sellTok.symbol} -> ${buyTok.symbol}`);
 
-  const q = await quote({
-    sell: sellTok.categoryId, buy: buyTok.categoryId, amount: amountBase, side: 'sell',
+  // ---- quote: no wallet, no keys --------------------------------------------
+  // Pools are keyed by the TOKEN side. A BCH->PUSD swap routes through PUSD
+  // pools, and so does PUSD->BCH; asking for BCH pools finds none.
+  const poolTokenId = buyTok.categoryId === 'bch' ? sellTok.categoryId : buyTok.categoryId;
+  const pools = await fetchPools(poolTokenId);
+  const trade = quoteSwap({
+    sell: sellTok.categoryId,
+    buy: buyTok.categoryId,
+    amountBaseUnits: amountBase,
+    pools,
   });
-  console.error(`[1/4] quote: ${displayAmount(q.outputAmount, buyTok.decimals)} ${buyTok.symbol} across ${q.poolCount} pool(s)`);
-  console.error(`      price ${q.priceBefore} -> ${q.priceAfter} after your trade`);
+
+  console.error(`[1/4] quote: ${displayAmount(trade.summary.demand, outDecimals)} ${buyTok.symbol} across ${trade.entries.length} pool(s)`);
+  for (const [n, e] of trade.entries.entries()) {
+    console.error(`      pool ${n + 1}: +${e.supply} in -> ${e.demand} out`);
+  }
 
   if (quoteOnly) {
     console.log(JSON.stringify({
       sell: sellTok.symbol, buy: buyTok.symbol,
-      amount_in: amountBase.toString(), expected_output: q.outputAmount,
-      pools: q.poolCount, price_before: q.priceBefore, price_after: q.priceAfter,
-      dry_run: true,
+      amount_in: amountBase.toString(),
+      expected_output: trade.summary.demand.toString(),
+      pools: trade.entries.length,
+      engine: 'exlab',
     }, null, 2));
     return;
   }
 
+  // Past this line we load key material. Nothing above touches a key.
   const w = loadWallet();
   if (!w) { console.error('no wallet; run create-wallet.mjs first'); process.exit(1); }
+  const account = w.account || 0;
   const { hdNode } = loadHdNode();
   console.error(`network: ${w.network}`);
 
-  // The router needs our own spendable UTXOs to fund the trade, and the input
-  // asset must match the sell side: sending the wrong asset into a swap would
-  // hand the router a funding set it cannot use.
-  console.error('[2/4] collecting funding UTXOs...');
+  // ---- funding UTXOs --------------------------------------------------------
   // Scan change addresses too, not just receiving ones. Change is money this
   // wallet sent itself and got back; leaving it out under-reports the spendable
-  // balance. On this wallet 856,855 of 1,657,855 sat sat on a change address,
-  // so a receiving-only scan could only ever offer 801,000 sat. balance.mjs and
+  // balance. On this wallet 856,855 of 1,657,855 sat sat on a change address, so
+  // a receiving-only scan could only ever offer 801,000 sat. balance.mjs and
   // sweep.mjs already scan both; this keeps the three consistent.
-  // Derive the scan window from the wallet's own counters, not a fixed 20. The
-  // hardcoded limit meant this wallet's coin at change index 38 was invisible
-  // here, exactly as it was to balance.mjs -- and the failure is silent, because
-  // a scan that finds little reports "not enough funds" rather than "looked in
-  // the wrong place".
+  // Derive the scan window from the wallet's own counters, not a fixed 20: the
+  // hardcoded limit made the coin at change index 38 invisible, and the failure
+  // is silent, because a scan that finds little reports "not enough funds"
+  // rather than "looked in the wrong place".
   const st = loadState();
   const recvCount = scanCount('address_index', st);
   const chgCount = scanCount('change_index', st);
@@ -180,10 +249,11 @@ async function runAttempt(attempt = 1) {
     `(state: addr ${st.address_index}, change ${st.change_index})...`
   );
   const addrs = [
-    ...deriveReceivingAddresses(recvCount).map((a) => ({ ...a, chain: 'recv' })),
-    ...deriveChangeAddresses(chgCount).map((a) => ({ ...a, chain: 'change' })),
+    ...deriveReceivingAddresses(recvCount).map((a) => ({ ...a, chain: 0 })),
+    ...deriveChangeAddresses(chgCount).map((a) => ({ ...a, chain: 1 })),
   ];
-  const byAddress = new Map(addrs.map((a) => [a.address, a]));
+
+  console.error('[2/4] collecting funding UTXOs...');
   const client = await connect(w.network);
   const funding = [];
   try {
@@ -204,22 +274,21 @@ async function runAttempt(attempt = 1) {
         // only its own dust-level sats (1000 here), nowhere near the ~13,000
         // sats a swap's outputs plus miner fee need, so the router rejected the
         // set with "insufficient_funds: inputs 14188 sats cannot cover outputs
-        // 13184 + miner fee 1173" -- 14,188 being the router's own total for
-        // the two token UTXOs we sent it. The 801,000 sats of plain BCH the
-        // wallet actually held were never offered.
+        // 13184 + miner fee 1173" -- 14,188 being the router's own total for the
+        // two token UTXOs we sent it. The 801,000 sats of plain BCH the wallet
+        // actually held were never offered.
         //
         // So: always include plain BCH as coin, and include token UTXOs only
         // when they match the sell asset. Sending a DIFFERENT token as funding
-        // would hand the router an input it cannot use, so those stay out.
+        // would hand the builder an input it cannot use, so those stay out.
         const isToken = !!u.token_data;
         if (isToken && u.token_data?.category !== sellTok.categoryId) continue;
         funding.push({
           txid: u.tx_hash,
           vout: u.tx_pos,
           value: String(u.value),
-          scriptHex: binToHex(addressToLockingBytecode(a.address)),
-          token: isToken ? { category: sellTok.categoryId, amount: String(u.token_data.amount) } : null,
-          role: isToken ? 'sell-asset' : 'coin',
+          lockingBytecode: addressToLockingBytecode(a.address),
+          token: isToken ? { token_id: sellTok.categoryId, amount: String(u.token_data.amount) } : null,
           address: a.address,
           index: a.index,
           chain: a.chain,
@@ -234,411 +303,170 @@ async function runAttempt(attempt = 1) {
     console.error(`no ${sellTok.symbol} UTXOs available to fund the swap`);
     process.exit(2);
   }
-  const sellAssets = funding.filter((f) => f.role === 'sell-asset');
-  const coins = funding.filter((f) => f.role === 'coin');
-  const sellSats = sellAssets.reduce((a, f) => a + BigInt(f.value), 0n);
-  const coinSats = coins.reduce((a, f) => a + BigInt(f.value), 0n);
+  // For a BCH sell the coin UTXOs ARE the sell asset -- they are one set, not
+  // two. Treating them as disjoint categories made sellSats 0 and reported
+  // "insufficient BCH: need 100000 sats, have 0" against a wallet holding
+  // 1,656,311 sats. The token-sell case is the one with two genuinely distinct
+  // sets, because the sell asset is a token and the coin is BCH.
+  const isBchSell = sellTok.categoryId === 'bch';
+  const sellAssets = funding.filter((f) => f.token && f.token.token_id === sellTok.categoryId);
+  const coins = funding.filter((f) => !f.token);
+  const sellSats = sellAssets.reduce((acc, f) => acc + BigInt(f.value), 0n);
+  const coinSats = coins.reduce((acc, f) => acc + BigInt(f.value), 0n);
+  const sellTokens = sellAssets.reduce((acc, f) => acc + BigInt(f.token.amount), 0n);
   console.error(
-    `      ${funding.length} UTXO(s) available: ${sellAssets.length} sell-asset (${sellSats} sat), ${coins.length} coin (${coinSats} sat)`,
+    `      ${funding.length} UTXO(s) available: ${coins.length} coin (${coinSats} sat)` +
+    (isBchSell ? '' : `, ${sellAssets.length} sell-asset (${sellTokens} ${sellTok.symbol})`)
   );
 
-  const receiveAddr = addrs[0].address;
-  // Derive the change address WITHOUT consuming it. newChangeAddress() persists
-  // the increment on call, so calling it here burned addresses on every run that
-  // reached signing -- including runs the network then rejected. Observed: a
-  // swap rejected with "Missing inputs" advanced change_index by 5, and five
-  // such runs pushed it 40 -> 45.
-  //
-  // The address is derived, not reserved; the counter moves only after a
-  // broadcast is confirmed to have been accepted.
+  const sellAssetsUsable = isBchSell ? coins : sellAssets;
+  const sellSatsUsable = isBchSell ? coinSats : sellSats;
+  if (isBchSell && sellSatsUsable < amountBase) {
+    throw new Error(`insufficient ${sellTok.symbol}: need ${amountBase} sats, have ${sellSatsUsable}`);
+  }
+  if (!isBchSell && sellTokens < amountBase) {
+    throw new Error(`insufficient ${sellTok.symbol}: need ${amountBase}, have ${sellTokens}`);
+  }
+  // A token sell still pays its miner fee in BCH.
+  if (!isBchSell && coinSats < 2000n) {
+    throw new Error(`insufficient BCH for the miner fee: have ${coinSats} sats`);
+  }
+
+  // For a BCH sell the trade consumes BCH, so the coin UTXOs are the spend; for
+  // a token sell the token UTXOs are. The SDK sweeps whatever it does not consume
+  // to the change output, which is why a CHANGE payout rule is required and why
+  // passing hand-made output objects fails.
+  const spendSet = sellAssetsUsable;
+  const chosen = [];
+  let total = 0n;
+  for (const f of [...spendSet].sort((a, b) => (BigInt(a.value) > BigInt(b.value) ? -1 : 1))) {
+    chosen.push(f);
+    total += BigInt(f.value);
+    if (total >= amountBase * 2n + 20000n) break;
+  }
+  if (total < amountBase) {
+    throw new Error(`cannot cover ${amountBase} from ${total} sats of ${sellTok.symbol}`);
+  }
+
+  // DERIVE the change address, never reserve it. newChangeAddress() persists the
+  // increment on call, so calling it with the default burned an address on every
+  // run that reached signing -- including runs the network then rejected.
+  // Observed: a swap rejected with "Missing inputs" advanced change_index by 5,
+  // and five such runs pushed it 40 -> 45. The counter moves only after a
+  // broadcast is confirmed accepted.
   const changeReservation = newChangeAddress(false);
-  const changeAddr = changeReservation.address;
+  const changeLocking = addressToLockingBytecode(changeReservation.address);
 
-  console.error('[3/4] building the unsigned swap...');
-  const build = await buildSwap({
-    sell: sellTok.categoryId, buy: buyTok.categoryId, amount: amountBase, side: 'sell',
-    funding: funding.map(({ txid, vout, value, scriptHex, token }) =>
-      token ? { txid, vout, value, scriptHex, token } : { txid, vout, value, scriptHex }),
-    // role is local bookkeeping only and is deliberately not sent.
-    receiveAddr, changeAddr,
-    minOutput: minOutput || undefined,
-  });
+  // ---- build ----------------------------------------------------------------
+  // coin.key is the CHILD PRIVATE KEY for the address holding that UTXO. Not the
+  // seed, not the HD root: a library that mishandles a key then leaks one
+  // input's key rather than the whole wallet. f.chain is the derivation chain
+  // from the scan, which is what keeps /0/19 and /1/19 distinct.
+  const inputCoins = chosen.map((f) => ({
+    outpoint: { index: f.vout, txhash: wireTxid(f.txid) },
+    output: {
+      locking_bytecode: f.lockingBytecode,
+      amount: BigInt(f.value),
+      token: f.token ? { amount: BigInt(f.token.amount), token_id: f.token.token_id } : undefined,
+    },
+    type: SpendableCoinType.P2PKH,
+    key: deriveChildPrivKey(hdNode, account, f.chain, f.index),
+  }));
 
-  // The router is documented as beta and says a quote must be checked against
-  // the built transaction. This is that check, and the last gate before a
-  // signature exists.
-  const gate = verifyBuildAgainstQuote(q, build, { minOutput: minOutput || undefined });
-  if (!gate.ok) {
+  console.error('[3/4] building the swap...');
+  const built = buildSwap({ trade, inputCoins, changeLockingBytecode: changeLocking });
+  console.error(
+    `      built ${built.unsignedTxHex.length / 2} bytes, ` +
+    `${built.payoutsInfo.length} payout(s), fee ${built.feeSats} sats (already signed)`
+  );
+
+  // ---- verify: the last gate before anything moves --------------------------
+  // The short-payment guard. Ownership checks cannot catch "right address, wrong
+  // amount", so the BUILT payout is compared against the quote the user is about
+  // to approve, and a shortfall refuses rather than warns.
+  const v = verifyAgainstQuote({ trade, built, minOutputBaseUnits: minOutput ? BigInt(minOutput) : null });
+  if (!v.ok) {
     console.error('REFUSING TO SIGN -- the built transaction does not match the quote:');
-    for (const p of gate.problems) console.error(`  - ${p}`);
-    process.exit(3);
-  }
-  console.error(`      verify: build matches quote (output ${build.expectedOutput})`);
-
-  // The comparison above checks two numbers the ROUTER supplied, so a
-  // compromised router could satisfy it while redirecting the output. Read the
-  // transaction bytes that would actually be signed and confirm every output
-  // goes to an address we control, or is a small plain output we account for as
-  // fee. A token-aware output is never accepted as a fee: that is an asset
-  // leaving the wallet, not satoshis.
-  const outputCheck = await verifyTransactionOutputs(build.unsignedTxHex, {
-    expectedReceiveAddresses: [receiveAddr],
-    // The amount the quote promised, and the floor the user set. Without
-    // these the gate proves the money is going to our address but never that
-    // the right AMOUNT arrives, which is the one thing a hostile router can
-    // change while keeping every ownership check happy.
-    expectedReceiveAmount: q.outputAmount,
-    minReceiveAmount: minOutput || q.outputAmount,
-    changeAddresses: [changeAddr],
-    maxFeeSats: routerFeeCeiling(build),
-    // A BCH -> PUSD swap has no token outputs (it sells plain BCH). A
-    // PUSD -> BCH swap has many, all paying pool covenants, and every one must
-    // be PUSD -- the asset actually being sold.
-    expectedSellTokenCategory: sellTok.categoryId === 'bch' ? null : sellTok.categoryId,
-    // The route the user agreed to: how many pools the quote said, and how much
-    // BCH the inputs carry. Together these make the built transaction checkable
-    // rather than merely self-consistent.
-    maxSellValueSats: sellTok.categoryId === 'bch' ? amountBase : null,
-    expectedPoolCount: q.poolCount,
-    maxInputValueSats: funding.reduce((acc, u) => acc + BigInt(u.value), 0n),
-  });
-  if (!outputCheck.ok) {
-    console.error('REFUSING TO SIGN -- the built transaction pays an address we do not control:');
-    for (const p of outputCheck.problems) console.error(`  - ${p}`);
+    for (const p of v.problems) console.error(`  - ${p}`);
     process.exit(3);
   }
   console.error(
-    `      verify: ${outputCheck.outputs.filter((o) => o.isOurs).length}/${outputCheck.outputs.length} outputs are ours` +
-    ` (amount ${build.expectedOutput})`
+    `      verified: pays ${displayAmount(v.paidOut, outDecimals)} ${buyTok.symbol} ` +
+    `against a quote of ${displayAmount(v.quoteDemand, outDecimals)}`
   );
 
-  console.error(`      router fee ${build.feeSats} sats, miner fee ${build.minerFeeSats} sats`);
-  console.error(`      we sign input(s) ${JSON.stringify(build.inputsToSign)}`);
-
-  // The router names which inputs are OURS as indices into the transaction it
-  // built, which mixes our inputs with the pools' 27. It is NOT an index into
-  // `funding`.
-  //
-  // A live mainnet dry-run proved this: with 2 funding UTXOs the router
-  // returned inputsToSign [12, 13], and the old code looked those up in
-  // `funding` -- where index 12 does not exist, producing "no funding UTXO
-  // supplied for input 12". The error names an input that cannot exist, which
-  // is the tell that the two index spaces were being conflated.
-  //
-  // So map the router's index to a funding UTXO by outpoint: read the input's
-  // outpoint out of the built transaction and find the funding entry that
-  // spends the same txid:vout. The router is only permitted to name inputs we
-  // actually offered, so a name we cannot match is a refusal, not a guess.
-  const { decodeTransactionBCH } = await import('@bitauth/libauth');
-  const { hexToBin } = await import('../lib/hex.mjs');
-  const builtInputs = decodeTransactionBCH(hexToBin(build.unsignedTxHex)).inputs;
-
-  const byOutpoint = new Map(funding.map((u) => [`${u.txid}:${u.vout}`, u]));
-  const fundingForInput = new Map();   // router input index -> funding entry
-  for (const index of build.inputsToSign) {
-    const input = builtInputs[index];
-    if (!input) {
-      console.error(`REFUSING TO SIGN -- the router named input ${index}, but the built transaction has only ${builtInputs.length} inputs.`);
-      process.exit(3);
-    }
-    // Electrum and the transaction serialisation disagree on byte order, so
-    // match on both. Getting this backwards would look like "unknown UTXO".
-    const txid = Buffer.from(input.outpointTransactionHash).toString('hex');
-    const reversed = Buffer.from(input.outpointTransactionHash).reverse().toString('hex');
-    const vout = Number(input.outpointIndex);
-    const match = byOutpoint.get(`${txid}:${vout}`) || byOutpoint.get(`${reversed}:${vout}`);
-    if (!match) {
-      console.error(
-        `REFUSING TO SIGN -- the router wants us to sign input ${index}, which spends ` +
-        `${reversed}:${vout}, and that is not one of the UTXOs we offered.`
-      );
-      process.exit(3);
-    }
-    fundingForInput.set(index, match);
-  }
-
-  // The pool covenant inputs are the router's, not ours, and they are the ones
-  // that go stale: a competing swap spends the same pool outputs, and ABC then
-  // rejects the whole transaction with "Missing inputs" -- an error that reads
-  // like a malformed transaction rather than a spent input. ABC raises that
-  // only from HaveCoin/HaveInputs, so an unspent-output check is exactly the
-  // right test. Check before signing: after signing we have spent a signature
-  // and a fee to learn the route was stale.
-  {
-    // Token-aware node, NOT connect(w.network). The pool parents are Cauldron
-    // covenant transactions: a plain Fulcrum node does not index p2sh32 and
-    // answers every blockchain.transaction.get for them with a null, so every
-    // pool input read as "parent unknown" and the stale-pool gate silently
-    // degraded to "could not read anything" on every run.
-    const checkClient = await connectToken();
-    const stale = [];
-    let unreadable = 0;
-    try {
-      for (let i = 0; i < builtInputs.length; i++) {
-        if (fundingForInput.has(i)) continue;          // ours; already verified above
-        // libauth's outpointTransactionHash is stored LITTLE-ENDIAN (wire
-        // order), so the raw bytes ARE the on-chain order. Electrum's
-        // tx_hash is the big-endian display form -- the reverse. The router
-        // names the parent in wire order, so send the bytes as they are and
-        // only fall back to the reversed form. Doing it the other way round
-        // looks up a txid that does not exist and reports a healthy route as
-        // "parent unknown".
-        const wireOrder = Buffer.from(builtInputs[i].outpointTransactionHash).toString('hex');
-        const displayOrder = Buffer.from(builtInputs[i].outpointTransactionHash).reverse().toString('hex');
-        const vout = Number(builtInputs[i].outpointIndex);
-        let parent = null;
-        let raw = null;
-        for (const candidate of [wireOrder, displayOrder]) {
-          // `request` is VARIADIC, not array-taking: passing [candidate, false]
-          // puts [[candidate, false]] on the wire and the node answers {},
-          // which is indistinguishable from 'no such transaction'. That made
-          // every one of the 15 pool inputs read as 'parent unknown' and
-          // disabled the stale-pool safety check, on a pool transaction that
-          // demonstrably exists (verified by both byte orders on two nodes).
-          parent = await checkClient.request('blockchain.transaction.get', candidate, false)
-            .catch(() => null);
-          if (typeof parent === 'string') { raw = candidate; break; }
-        }
-        // Decode the parent with libauth instead of walking it by hand.
-        //
-        // The pool parent is 10,851 bytes with 57 inputs and 56 outputs, and the
-        // hand-rolled walk drifted: it returned the SAME wrong locking script
-        // for vout 4, 5 and 32, because the byte cursor slipped inside a
-        // CashToken prefix (0xef = PREFIX_TOKEN) rather than landing on an
-        // output boundary. Identical wrong bytes for different indices is the
-        // signature of a misaligned parse.
-        //
-        // It failed SILENTLY, which is what made it expensive. The wrong lock
-        // still hashes to a perfectly valid scripthash, and querying a valid
-        // scripthash for a script the node does not index legitimately returns
-        // an empty UTXO set -- so all 13 live pools came back "already spent".
-        //
-        // decodeTransactionBCH is already imported above for the unsigned tx,
-        // so this is strictly less code and one decoder instead of two.
-        let parentTx;
-        try {
-          parentTx = decodeTransactionBCH(hexToBin(parent));
-        } catch {
-          // Undecodable parent is a transport problem, not proof the pool is
-          // spent. Count it as unreadable so the caller reports it honestly
-          // instead of refusing or silently proceeding.
-          unreadable += 1;
-          continue;
-        }
-        const parentOutput = parentTx.outputs[vout];
-        if (!parentOutput) { unreadable += 1; continue; }
-        const lock = parentOutput.lockingBytecode;
-        // Ask with cross-node confirmation. A single node answering
-        // listunspent with an empty array does NOT mean the output is spent:
-        // Fulcrum does not index p2sh32 covenant scripts and reports 0 unspent
-        // and 0 confirmed for every live Cauldron pool. Measured on all 13 pool
-        // covenants of a real quote: Rostrum saw 1..60 unspent each, Fulcrum saw
-        // none, and 13 of 13 disagreed. Reading the empty answer as
-        // 'already spent' would refuse a perfectly good swap.
-        // The EXACT outpoint, not merely this covenant has some live coin.
-        // A competing swap re-creates the covenant at a new position, so the
-        // lock keeps live outputs while our chosen outpoint is already consumed
-        // -- the weaker check passed 12/12 on a parent whose 56 outputs were all
-        // spent, and every broadcast was rejected.  is the display-order
-        // txid of the parent as the router named it.
-        const verdict = await outpointIsUnspent(Buffer.from(lock).toString('hex'), vout, raw, {
-          network: w.network,
-        });
-        if (verdict === 'spent') {
-          stale.push({ i, raw, vout, why: 'outpoint not in the unspent set' });
-        } else if (verdict === 'inconclusive') {
-          unreadable += 1;
-        }
-      }
-    } finally {
-      await checkClient.disconnect();
-    }
-    const poolInputCount = builtInputs.length - fundingForInput.size;
-    if (unreadable) {
-      console.error(`      note: ${unreadable} of ${poolInputCount} pool input(s) unreadable from any node;`);
-      console.error('            treating as unproven rather than spent.');
-    }
-    if (stale.length === 0 && unreadable < poolInputCount) {
-      console.error(`      pool inputs verified unspent (${poolInputCount - unreadable}/${poolInputCount})`);
-    } else if (stale.length === poolInputCount) {
-      // EVERY pool input is confirmed spent. This is the exact case the gate
-      // exists to catch, and it used to be exempted here as a "transport
-      // problem", which is why three consecutive attempts signed and broadcast
-      // a transaction built entirely from drained positions. Refuse.
-      //
-      // A genuine transport failure lands in `unreadable`, not `stale`: a node
-      // that cannot read a parent increments unreadable, and a node that cannot
-      // see p2sh32 covenants never returns a verdict at all.
-      console.error(`REFUSING TO SIGN -- all ${poolInputCount} pool input(s) are already spent.`);
-      for (const x of stale.slice(0, 5)) {
-        console.error(`      input ${x.i}: ${x.raw?.slice(0, 16)}.. v${x.vout}  ${x.why}`);
-      }
-      console.error('');
-      console.error('The router served pool state that a competing swap has already');
-      console.error('consumed. This is the normal condition on a busy pool, not a');
-      console.error('malformed transaction: retry to be quoted against fresh pools.');
-      // Exit rather than throw: this is the same refusal as the partial-stale
-      // branch below, and a throw fell through to it, printing the list twice
-      // and reporting "24 of 24" for a 12-input transaction.
-      process.exit(4);
-    } else if (unreadable === poolInputCount) {
-      // Every pool input could not be read. That IS a transport problem (this
-      // node answered null to every blockchain.transaction.get during the check),
-      // not evidence that the pools are spent. Say so, and let the caller proceed
-      // to a broadcast, which is the authority.
-      console.error('      note: could not read the router\'s pool inputs from this node;');
-      console.error('            continuing so the broadcast can confirm or refute them.');
-    } else if (stale.length) {
-      console.error(`REFUSING TO SIGN -- ${stale.length} of the router's pool inputs are no longer spendable:`);
-      for (const x of stale.slice(0, 5)) {
-        console.error(`  - input ${x.i} spends ${x.raw.slice(0, 16)}...:${x.vout} (${x.why})`);
-      }
-      if (stale.length > 5) console.error(`  ... and ${stale.length - 5} more`);
-      console.error('');
-      console.error('The router served pool state that a competing swap has already');
-      console.error('consumed. This is the normal condition on a busy pool, not a');
-      console.error('malformed transaction: retry to be quoted against fresh pools.');
-      process.exit(4);
-    }
-  }
-
-  // The router names which inputs are ours; each must be one we funded. Keyed by
-  // the router's input index, not by position in `funding`.
-  const signed = await signExternalTransaction({
-    unsignedTxHex: build.unsignedTxHex,
-    inputsToSign: build.inputsToSign,
-    sourceOutputs: build.sourceOutputs,
-    // Bind the router's choice of inputs to the funding set we actually chose.
-    // The router says which inputs are ours; we say which UTXOs we meant to
-    // spend. If those disagree, refuse rather than sign the router's choice.
-    expectedInput: (index) => {
-      const utxo = fundingForInput.get(index);
-      return utxo ? { txid: utxo.txid, vout: Number(utxo.vout) } : null;
-    },
-    inputMaterial: (index) => {
-      const utxo = fundingForInput.get(index);
-      if (!utxo) throw new Error(`no funding UTXO supplied for input ${index}`);
-      // Resolve the FULL derivation path, not just the index. This used to pass
-      // change=0 unconditionally, so a change-chain UTXO was signed with the
-      // receiving-chain key for the same index: `/0/19` instead of `/1/19`. The
-      // signature then fails to validate against the script, and the failure
-      // surfaces as a "Missing inputs"-style rejection that reads like a
-      // malformed transaction rather than a wrong key.
-      //
-      // It stayed hidden because the funding scan only reaches change index 19
-      // while change_index is 40, so every change UTXO the swap could see
-      // happened to be on the receiving chain. That is a coincidence of current
-      // state, not a property of the code, and it breaks the first time a swap
-      // is funded from a change address. `derived.chain` is already carried from
-      // the scan, and resolveAddressPath throws rather than guessing when an
-      // address is in neither chain.
-      const derived = byAddress.get(utxo.address);
-      if (!derived) throw new Error(`no key derivable for input ${index}`);
-      const change = derived.chain === 'change' ? 1 : 0;
-      return {
-        privateKey: deriveChildPrivKey(hdNode, 0, change, derived.index),
-        valueSatoshis: BigInt(utxo.value),
-      };
-    },
+  // No foreign output is acceptable in a locally built swap. payoutsInfo holds
+  // only what the user receives plus change -- the pool covenant outputs are not
+  // in it, they are the pool's own locked positions.
+  const changeHex = Buffer.from(changeLocking).toString('hex');
+  const foreign = (built.payoutsInfo ?? []).filter((p) => {
+    const bc = p.output?.locking_bytecode;
+    if (!bc) return false;
+    return Buffer.from(bc).toString('hex') !== changeHex;
   });
+  const foreignSats = foreign.reduce((a, p) => a + BigInt(p.output?.amount ?? 0n), 0n);
+  if (foreignSats > FOREIGN_OUTPUT_CEILING) {
+    console.error(`REFUSING TO SIGN -- ${foreign.length} payout(s) we do not control, ${foreignSats} sats`);
+    process.exit(3);
+  }
 
   const out = {
-    txid: signed.txid,
-    tx_hex: signed.txHex,
-    sell: sellTok.symbol,
-    buy: buyTok.symbol,
+    engine: 'exlab',
+    sell: sellTok.symbol, buy: buyTok.symbol,
     amount_in: amountBase.toString(),
-    amount_out: build.expectedOutput,
-    amount_out_display: displayAmount(build.expectedOutput, buyTok.decimals),
-    router_fee_sats: build.feeSats,
-    miner_fee_sats: build.minerFeeSats,
-    dry_run: true,
+    amount_out: v.paidOut.toString(),
+    amount_out_display: displayAmount(v.paidOut, outDecimals),
+    inputs: chosen.length,
+    fee_sats: built.feeSats.toString(),
+    tx_hex: built.unsignedTxHex,   // the SDK returns it already signed
   };
 
   if (process.env.BCH_CONFIRM !== 'yes') {
     console.error('DRY RUN -- set BCH_CONFIRM=yes to broadcast');
-    console.log(JSON.stringify(out, null, 2));
+    console.log(JSON.stringify({ ...out, dry_run: true }, null, 2));
     return;
   }
 
+  // ---- broadcast ------------------------------------------------------------
+  // Electrum only. The Cauldron HTTP endpoint presents no TLS certificate at
+  // all -- "no peer certificate available", verified from two hosts -- so it is
+  // not a fallback that works, and offering it as one would only produce a
+  // confusing second failure after a first.
   console.error('[4/4] broadcasting...');
-  // Broadcast over Electrum first, using a fresh connection. The HTTP endpoint
-  // is a fallback, not the primary: it is a third-party service that was
-  // serving zero bytes over TLS, and a swap never needed it -- Electrum's
-  // `blockchain.transaction.broadcast` is how every other command in this repo
-  // already broadcasts, and the mainnet servers accept token outputs.
-  const txid = await broadcastSwapWithFallback(w.network, signed.txHex);
+  const bc = await connect(w.network);
+  let txid;
+  try {
+    const r = await broadcastViaElectrum(bc, built.unsignedTxHex);
+    txid = r.txid;
+    console.error(`      broadcast via Electrum (${w.network}), txid ${txid}`);
+  } catch (e) {
+    // A failure to broadcast is NOT a failure to sign: the hex is already valid
+    // and can be broadcast by hand, so it travels with the error.
+    //
+    // "Missing inputs" is the pools going stale under us. Those bytes are
+    // permanently dead, so the only fix is a rebuild against fresh pool state. A
+    // transport error leaves the transaction valid, so it is NOT retryable --
+    // rebuilding on a network blip would move the price against the user for
+    // nothing.
+    e.retryable = /missing inputs|bad-txns-inputs|txn-mempool-conflict|conflict/i.test(e.message);
+    e.signedHex = built.unsignedTxHex;
+    throw e;
+  } finally {
+    try { bc.disconnect(); } catch { /* already closed */ }
+  }
+
   // Only now, with the node having confirmed the txid, is it safe to consume the
   // change address. Deriving it is free; reserving it is the part that costs.
   const newIndex = commitChangeAddress(changeReservation.index);
-  console.error(`   change address ${changeReservation.index} committed (change_index=${newIndex})`);
+  console.error(`      change address ${changeReservation.index} committed (change_index=${newIndex})`);
 
   console.log(JSON.stringify({ ...out, dry_run: false, broadcast: true, txid }, null, 2));
 }
 
-// Broadcast, preferring Electrum and falling back to the router's HTTP endpoint.
-//
-// Both paths are reported in the error if both fail, because "the swap failed"
-// and "the broadcast failed" are different problems and the user needs to know
-// which. A failure to broadcast is NOT a failure to sign: the signed hex is
-// already valid and can be broadcast by hand, so that is included in the error.
-async function broadcastSwapWithFallback(network, signedTxHex) {
-  const attempts = [];
-
-  let client = null;
-  try {
-    client = await connect(network);
-    const r = await broadcastViaElectrum(client, signedTxHex);
-    console.error(`      broadcast via Electrum (${network}), txid ${r.txid}`);
-    return r.txid;
-  } catch (e) {
-    attempts.push(`electrum(${network}): ${e.message}`);
-  } finally {
-    if (client) await client.disconnect().catch(() => {});
-  }
-
-  try {
-    const r = await broadcastSwap(signedTxHex);
-    console.error(`      broadcast via the Cauldron HTTP endpoint, txid ${r.txid}`);
-    return r.txid;
-  } catch (e) {
-    attempts.push(`cauldron http: ${e.message}`);
-  }
-
-  const err = new Error(
-    `could not broadcast the signed transaction by either path:\n` +
-    attempts.map((a) => `  - ${a}`).join('\n') +
-    `\n\nThe transaction IS signed and valid. Its hex is above; it can be broadcast\n` +
-    `by hand, or the swap can be retried once a path is reachable.`
-  );
-
-  // "Missing inputs" is the pools going stale under us: a competing swap consumed
-  // them between our build and our broadcast. The bytes are permanently dead, so
-  // the only fix is a rebuild against a fresh quote. A transport error (node
-  // down, TLS failing) leaves the transaction perfectly valid, so retrying the
-  // same hex would work -- but that is handled by broadcastSwapWithFallback
-  // already trying both paths, and rebuilding on a network blip would move the
-  // price against the user for nothing.
-  err.retryable = attempts.some((a) => /missing inputs|bad-txns-inputs|txn-mempool-conflict|conflict/i.test(a));
-  err.signedHex = signedTxHex;
-  throw err;
+/** Electrum reports txids in display order; the SDK wants wire order. */
+function wireTxid(displayTxid) {
+  return Uint8Array.from(Buffer.from(String(displayTxid), 'hex').reverse());
 }
-
-// Retry wrapper.
-//
-// Cauldron pool UTXOs are shared state. A competing swap can consume the exact
-// inputs we selected while we are still building, and the node then rejects our
-// perfectly-valid signed transaction with "Missing inputs". Measured 2026-10-02:
-// a swap that passed every local gate (quote matched build, 2/15 outputs ours,
-// 13/13 pool inputs verified unspent across two nodes) was still rejected at
-// broadcast for exactly this reason.
-//
-// Retrying the same bytes is guaranteed to fail -- they name inputs that are
-// gone. So a retry re-runs the entire attempt against fresh pool state. Bounded
-// because each attempt costs a quote and can move the price against the user;
-// three is enough to ride out a contended block, and past that the pool is not
-// for us right now.
-const MAX_ATTEMPTS = Number(process.env.BCH_SWAP_ATTEMPTS || 3);
 
 async function main() {
   let lastErr = null;
@@ -652,13 +480,13 @@ async function main() {
         if (e.retryable) {
           console.error(
             `\n[retry] still "Missing inputs" after ${attempt} attempt(s) -- the pools are\n` +
-            `        being contested. Nothing was spent; your funds are unchanged.`
+            '        being contested. Nothing was spent; your funds are unchanged.'
           );
         }
         throw e;
       }
-      // The signed hex from the failed attempt is printed so a human can inspect
-      // it, but it is never re-broadcast: it is dead by construction.
+      // The signed hex from the failed attempt is reported so a human can
+      // inspect it, but it is never re-broadcast: it is dead by construction.
       console.error(
         `\n[retry] ${attempt}/${MAX_ATTEMPTS} rejected: ` +
         `${String(e.message).split('\n')[0].trim()}`
@@ -674,4 +502,13 @@ async function main() {
   throw lastErr;
 }
 
-main().catch((e) => { console.error('error:', e.message); process.exit(1); });
+main().catch((e) => {
+  console.error('error:', e.message);
+  if (e.signedHex) {
+    console.error(
+      '\nThe transaction IS signed and valid. Its hex is in the JSON above and can\n' +
+      'be broadcast by hand, or the swap retried once the pools are free.'
+    );
+  }
+  process.exit(1);
+});
