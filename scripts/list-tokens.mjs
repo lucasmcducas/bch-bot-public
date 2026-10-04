@@ -101,7 +101,18 @@ const list = await fetchJson('tokens/list_cached?limit=500');
 const rows = list.map(row).filter((r) => r.category && r.tvl_sats > 0)
   .sort((a, b) => b.tvl_sats - a.tvl_sats);
 
-if (asJson) { console.log(JSON.stringify(rows, null, 2)); process.exit(0); }
+if (asJson) {
+  // `null, 2` pretty-printing costs 134KB for 346 tokens, which is a real
+  // problem for a QML consumer: the wallet panel reads stdout through a
+  // StdioCollector, and that much text did not arrive intact, so the panel
+  // reported "no tokens have a live Cauldron market" while 346 tokens --
+  // PUSD included -- were sitting right there. `--compact` is for machine
+  // readers; the indented form stays the default because it is for humans
+  // piping into jq-less eyeballs.
+  const compact = argv.includes('--compact');
+  console.log(JSON.stringify(rows, null, compact ? 0 : 2));
+  process.exit(0);
+}
 
 const SHOWN = 25;
 const shown = rows.slice(0, SHOWN);
