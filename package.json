@@ -1,7 +1,7 @@
 {
   "name": "bch-bot",
   "version": "0.4.1",
-  "description": "BCH wallet bot — Node.js + libauth + public Rostrum/Electrum. Self-custodial BCH + CashTokens wallet.",
+  "description": "BCH wallet bot \u2014 Node.js + libauth + public Rostrum/Electrum. Self-custodial BCH + CashTokens wallet.",
   "type": "module",
   "main": "lib/wallet.mjs",
   "bin": {
@@ -20,13 +20,14 @@
     "add-liquidity": "node scripts/add-liquidity.mjs",
     "sweep": "node scripts/sweep.mjs",
     "history": "node scripts/history.mjs",
-    "test": "npm run lint && npm run lint:questions && npm run lint:covenant-node && node scripts/test-tokens.mjs && node scripts/test-pusd.mjs && node scripts/test-cauldron.mjs && node scripts/test-wallet-encryption.mjs && node scripts/test-router.mjs && node scripts/test-external-signing.mjs && node scripts/test-send-amount.mjs && node scripts/test-swap-outputs.mjs && node scripts/test-wallet.mjs && node scripts/test-pusd-fingerprints.mjs && node scripts/test-sweep-selection.mjs && node scripts/test-signer-binding.mjs && node scripts/test-network.mjs && node scripts/test-kdf-params.mjs && node scripts/test-broadcast.mjs && node scripts/test-token-registry.mjs && node scripts/test-panel-parsing.mjs",
+    "test": "npm run lint && npm run lint:questions && npm run lint:covenant-node && npm run lint:trade-pair-shape && node scripts/test-tokens.mjs && node scripts/test-pusd.mjs && node scripts/test-cauldron.mjs && node scripts/test-wallet-encryption.mjs && node scripts/test-router.mjs && node scripts/test-external-signing.mjs && node scripts/test-send-amount.mjs && node scripts/test-swap-outputs.mjs && node scripts/test-wallet.mjs && node scripts/test-pusd-fingerprints.mjs && node scripts/test-sweep-selection.mjs && node scripts/test-signer-binding.mjs && node scripts/test-network.mjs && node scripts/test-kdf-params.mjs && node scripts/test-broadcast.mjs && node scripts/test-lints-catch-their-own-bugs.mjs && node scripts/test-token-registry.mjs && node scripts/test-panel-parsing.mjs",
     "test:router": "node scripts/test-router.mjs",
     "test:signing": "node scripts/test-external-signing.mjs",
     "lint": "node scripts/lint-unused.mjs",
     "lint:questions": "node scripts/lint-check-questions.mjs",
     "lint:covenant-node": "node scripts/lint-covenant-node.mjs",
-    "test:lints": "node scripts/test-lints-catch-their-own-bugs.mjs"
+    "test:lints": "node scripts/test-lints-catch-their-own-bugs.mjs",
+    "lint:trade-pair-shape": "node scripts/lint-trade-pair-shape.mjs"
   },
   "keywords": [
     "bitcoin-cash",

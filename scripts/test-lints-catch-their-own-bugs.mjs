@@ -170,5 +170,46 @@ console.log('\nlint-covenant-node: does it catch a covenant read on a blind node
 check('the real tree passes it',
   lintSaysClean(ROOT, 'lint-covenant-node.mjs'));
 
+// ---------------------------------------------------------------------------
+console.log('\nlint-trade-pair-shape: does it catch a hardcoded token/token route?\n');
+
+{
+  // The defect: a caller routes two tokens directly. Cauldron has no such pool,
+  // so the trade can only fail -- and it fails deep inside the SDK with a
+  // message about NATIVE_BCH_TOKEN_ID, not with anything a user can act on.
+  const dir = scratch();
+  inject(dir, 'inject-route.mjs', `import { quoteSwap } from './exlab-swap.mjs';
+export async function badRoute(amount) {
+  return quoteSwap({ sell: 'pusd', buy: 'roach', amountBaseUnits: amount, pools: [] });
+}
+`);
+  check('catches a hardcoded pusd -> roach route',
+    !lintSaysClean(dir, 'lint-trade-pair-shape.mjs'));
+  rmSync(dir, { recursive: true, force: true });
+}
+
+{
+  // The INNOCENT case matters as much as the catching one. This lint's first
+  // version reported three findings on correct code -- the call site inside our
+  // own guard, where the sides are variables holding bch and a category. A lint
+  // that fires on the correct build is a lint that gets switched off, and a
+  // switched-off lint protects nothing.
+  const dir = scratch();
+  inject(dir, 'inject-param.mjs', `import { quoteSwap } from './exlab-swap.mjs';
+export async function goodRoute(sellTokenId, buyTokenId, amount) {
+  return quoteSwap({ sell: sellTokenId, buy: buyTokenId, amountBaseUnits: amount, pools: [] });
+}
+export async function bchRoute(amount) {
+  return quoteSwap({ sell: 'bch', buy: 'PUSD', amountBaseUnits: amount, pools: [] });
+}
+`);
+  check('does NOT fire on a parameterised pair or on a bch pair',
+    lintSaysClean(dir, 'lint-trade-pair-shape.mjs'));
+  rmSync(dir, { recursive: true, force: true });
+}
+
+check('the real tree passes it',
+  lintSaysClean(ROOT, 'lint-trade-pair-shape.mjs'));
+
 console.log(`\nRESULT: ${passed} passed, ${failed} failed (${passed + failed} total)`);
 process.exit(failed === 0 ? 0 : 1);

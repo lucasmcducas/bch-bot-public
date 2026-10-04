@@ -206,6 +206,10 @@ async function runAttempt(attempt = 1) {
     buy: buyTok.categoryId,
     amountBaseUnits: amountBase,
     pools,
+    // Already resolved to a symbol by the caller; only used to make a refusal
+    // legible ("no direct market for PUSD -> ROACH") instead of two hex strings.
+    sellSymbol: sellTok.symbol,
+    buySymbol: buyTok.symbol,
   });
 
   console.error(`[1/4] quote: ${displayAmount(trade.summary.demand, outDecimals)} ${buyTok.symbol} across ${trade.entries.length} pool(s)`);
