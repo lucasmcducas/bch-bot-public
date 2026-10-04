@@ -7,6 +7,13 @@
 //   BCH_CONFIRM=yes node scripts/send-token.mjs ...                          # actually broadcast
 //
 // Phase 2 CashTokens wiring on top of Phase 1's libauth compiler + Rostrum.
+
+  // ONE window, used for the scan AND for key resolution. These were two
+  // different numbers for years, and the disagreement made a token the wallet
+  // demonstrably holds unsignable.
+  const st = loadState();
+  const tokenScanWindow = Math.max(scanCount('address_index'), scanCount('change_index'));
+
 //
 // Pattern from Selene Wallet TransactionBuilderService.buildP2pkhTransaction
 // (gitlab.com/selene.cash/selene-wallet) + Moth's CLI script shape.
@@ -18,6 +25,7 @@ import {
   loadHdNode,
   deriveReceivingAddresses,
   scanCount,
+  loadState,
   deriveChangeAddresses,
   newChangeAddress,
   commitChangeAddress,
@@ -255,7 +263,20 @@ async function main() {
       ...u,
       hdNode,
       account: 0,
-      ...resolveAddressPath(u.address, { window: 20, label: 'token input UTXO' }),
+      // The window MUST be the same size as the scan above, or a token that
+      // this command already FOUND cannot be signed.
+      //
+      // It found 2.00 ROACH at change index 40 and then refused to sign it,
+      // because the scan used scanCount() -- the wallet's own counters, 45
+      // addresses -- while the resolver was hardcoded to 20. Every other
+      // signer in this repo derives both from the same place; this one did not,
+      // and the symptom is a command that says it cannot find money it is
+      // holding.
+      //
+      // A wrong window is worse than a small one: the point of resolving a key
+      // rather than guessing an index is that a wrong index signs with the
+      // wrong key, so the two numbers must come from one source.
+      ...resolveAddressPath(u.address, { window: tokenScanWindow, label: 'token input UTXO' }),
     }));
 
     // Map token outputs to libauth's output shape (signP2pkhTransaction expects
