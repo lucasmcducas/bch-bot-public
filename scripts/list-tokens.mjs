@@ -101,6 +101,28 @@ const list = await fetchJson('tokens/list_cached?limit=500');
 const rows = list.map(row).filter((r) => r.category && r.tvl_sats > 0)
   .sort((a, b) => b.tvl_sats - a.tvl_sats);
 
+// --search QUERY: filter by symbol, name, or category prefix. The panel needs
+// this because showing only the top N tokens makes every other token
+// unreachable, and a wallet that can list 20 markets but not find the one you
+// hold is a wallet you go around. Matching is case-insensitive and substring,
+// so "roach", "ROACH" and a category prefix all find the same token.
+const searchIdx = argv.indexOf('--search');
+const query = searchIdx !== -1 ? String(argv[searchIdx + 1] || '').trim().toLowerCase() : '';
+
+let out = rows;
+if (query) {
+  out = rows.filter((r) =>
+    String(r.symbol || '').toLowerCase().includes(query) ||
+    String(r.name || '').toLowerCase().includes(query) ||
+    String(r.category || '').toLowerCase().startsWith(query));
+}
+
+// --limit N: cap the result set. A search UI wants a bounded list it can render
+// without a scrollbar fight, and the caller can raise the cap or re-query.
+const limitIdx = argv.indexOf('--limit');
+const limit = limitIdx !== -1 ? Number(argv[limitIdx + 1]) : null;
+if (limit && limit > 0) out = out.slice(0, limit);
+
 if (asJson) {
   // `null, 2` pretty-printing costs 134KB for 346 tokens, which is a real
   // problem for a QML consumer: the wallet panel reads stdout through a
@@ -110,7 +132,7 @@ if (asJson) {
   // readers; the indented form stays the default because it is for humans
   // piping into jq-less eyeballs.
   const compact = argv.includes('--compact');
-  console.log(JSON.stringify(rows, null, compact ? 0 : 2));
+  console.log(JSON.stringify(out, null, compact ? 0 : 2));
   process.exit(0);
 }
 
