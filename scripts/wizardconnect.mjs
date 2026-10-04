@@ -109,6 +109,59 @@ if (!uri) {
 
 const rl = createInterface({ input: process.stdin, output: process.stderr });
 
+/**
+ * Ask, in plain words, what pairing actually costs, and wait for a human.
+ *
+ * Connecting is IRREVOCABLE in the sense that matters: the dapp receives the
+ * wallet's chain-level xpubs right after the key exchange, which reveals every
+ * current AND FUTURE address. Cashonize says so before it connects, and its
+ * dialog is the reference wording:
+ *
+ *   "Share wallet addresses with this dApp?"
+ *     Connecting shares your wallet's full current and future address list
+ *     (the xpub) with the dApp.
+ *     The dApp can see your entire balance and transaction history, even after
+ *     disconnecting.
+ *     You lose the privacy of using fresh HD wallet addresses.
+ *     Spending your funds still requires your approval for each transaction.
+ *
+ * The first version of this script called svc.connect() with no prompt at all,
+ * which is a real gap rather than a UX difference: the operator never learns
+ * what they just handed over. Note the last line of Cashonize's copy is TRUE
+ * here too -- onApprove below still gates every signature -- and the second
+ * line is the one people skip, which is why it is the one quoted in full.
+ *
+ * There is deliberately no --yes. Same reasoning as the signing gate: a wallet
+ * that can be told to hand over every future address without a human is not a
+ * wallet.
+ */
+function askConsent() {
+  return new Promise((resolve) => {
+    process.stderr.write(`
+  Share wallet addresses with this dApp?
+
+  Connecting shares your wallet's full current and future address list
+  (the xpub) with the dApp.
+
+    - The dApp can see your entire balance and transaction history, even
+      after disconnecting.
+    - You lose the privacy of using fresh HD wallet addresses.
+    - Spending your funds still requires your approval for each transaction,
+      one transaction at a time.
+
+`);
+    rl.question('  Connect and share your address list? [y/N] ', (answer) => {
+      const yes = /^\s*y(es)?\s*$/i.test(answer || '');
+      if (!yes) {
+        process.stderr.write('  refused -- not connecting.\n');
+        resolve(false);
+        return;
+      }
+      resolve(true);
+    });
+  });
+}
+
 const svc = createWizardConnectService({
   onApprove: (summary, meta) => new Promise((resolve) => {
     process.stderr.write(render(summary, meta));
@@ -134,6 +187,14 @@ const svc = createWizardConnectService({
     process.stderr.write(`[wizardconnect] ${id.slice(0, 8)} disconnected: ${reason}\n`);
   },
 });
+
+// Consent first, connection second. The disclosure has to appear BEFORE the key
+// exchange, because the disclosure describes what the key exchange gives away.
+const consented = await askConsent();
+if (!consented) {
+  console.error('wizardconnect: not connecting.');
+  process.exit(1);
+}
 
 let connectionId;
 try {

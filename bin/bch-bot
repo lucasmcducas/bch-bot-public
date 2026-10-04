@@ -9,6 +9,7 @@
 //   bch-bot send <addr> <amt>   # send BCH (BCH_CONFIRM=yes required to broadcast)
 //   bch-bot send-token <addr> <cat> <amt>
 //   bch-bot swap <supply> <demand> <amount>
+//   bch-bot list-tokens            # every token with a live Cauldron market
 //   bch-bot wizardconnect pair <wiz-uri>
 //   bch-bot stake
 //   bch-bot add-liquidity <token_id> <bch_sats> <token_amt> [--first]
@@ -65,7 +66,7 @@ const SCRIPT_MAP = {
   'send': 'send.mjs',
   'send-token': 'send-token.mjs',
   'swap': 'swap.mjs',
-  'swap-open': 'swap-open.mjs',
+  'list-tokens': 'list-tokens.mjs',
   'wizardconnect': 'wizardconnect.mjs',
   'stake': 'stake.mjs',
   'add-liquidity': 'add-liquidity.mjs',

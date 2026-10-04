@@ -443,12 +443,24 @@ async function runAttempt(attempt = 1) {
     process.exit(3);
   }
 
+  // The key names are a CONTRACT with the Omarchy panel, which reads
+  // expected_output and pools from BOTH paths. The quote path has always
+  // emitted those names; the execute path used amount_out instead, so a swap
+  // would quote correctly and then show a BLANK "you receive" the moment the
+  // user confirmed -- the one screen where a wrong number matters most.
+  //
+  // Both spellings are emitted rather than one being renamed, because the panel
+  // and any other consumer may already depend on either, and a rename that
+  // breaks a UI silently is worse than a redundant key. amount_out is what a
+  // reader expects after a build; expected_output is what the panel reads.
   const out = {
     engine: 'exlab',
     sell: sellTok.symbol, buy: buyTok.symbol,
     amount_in: amountBase.toString(),
+    expected_output: v.paidOut.toString(),
     amount_out: v.paidOut.toString(),
     amount_out_display: displayAmount(v.paidOut, outDecimals),
+    pools: trade.entries.length,
     inputs: chosen.length,
     fee_sats: built.feeSats.toString(),
     tx_hex: built.unsignedTxHex,   // the SDK returns it already signed
