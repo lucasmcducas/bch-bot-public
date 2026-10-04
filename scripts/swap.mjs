@@ -463,9 +463,35 @@ async function runAttempt(attempt = 1) {
   console.log(JSON.stringify({ ...out, dry_run: false, broadcast: true, txid }, null, 2));
 }
 
-/** Electrum reports txids in display order; the SDK wants wire order. */
-function wireTxid(displayTxid) {
-  return Uint8Array.from(Buffer.from(String(displayTxid), 'hex').reverse());
+/**
+ * Outpoint transaction hash, byte for byte, with NO reversal.
+ *
+ * This function used to reverse. It was wrong, and the reversal cost us a real
+ * broadcast: "Missing inputs", three times, on a route whose pool inputs were
+ * verifiably unspent.
+ *
+ * The chain settles it, and I should have asked the chain first. Of the wallet's
+ * six unspent UTXOs, every one resolves on the network AS GIVEN and none
+ * resolves reversed:
+ *
+ *   fc87d83c84c0c3ceed4b7dde1d63949b6045bdc21d820e5c9f7a87dbb4838dfb
+ *     as-is: YES   reversed: no
+ *
+ * The reasoning that produced the reversal was: "Electrum reports display
+ * order, libauth wants wire order, therefore reverse." Both halves are true
+ * about ELECTRUM's own API, and neither applies to an outpoint on the wire --
+ * an outpoint stores the hash in the same order the network indexes it. So the
+ * reversal produced a hash that names a transaction which does not exist, and
+ * the network's answer, "Missing inputs", is indistinguishable from a spent
+ * input. That is the whole reason it was hard to find.
+ *
+ * Note the shape of the bug: it was applied to BOTH the pool inputs (from the
+ * indexer) and our own input (from Electrum). The pool inputs looked fine only
+ * because the indexer happens to report the same order Electrum does, so
+ * reversing both cancelled out for them and left exactly one input wrong.
+ */
+function wireTxid(txid) {
+  return Uint8Array.from(Buffer.from(String(txid), 'hex'));
 }
 
 async function main() {
