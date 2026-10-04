@@ -332,20 +332,30 @@ async function runAttempt(attempt = 1) {
     throw new Error(`insufficient BCH for the miner fee: have ${coinSats} sats`);
   }
 
-  // For a BCH sell the trade consumes BCH, so the coin UTXOs are the spend; for
-  // a token sell the token UTXOs are. The SDK sweeps whatever it does not consume
-  // to the change output, which is why a CHANGE payout rule is required and why
-  // passing hand-made output objects fails.
-  const spendSet = sellAssetsUsable;
+  // A BCH sell spends the coin UTXOs. A TOKEN sell must supply BOTH: the token
+  // UTXOs are the sell asset, and coin UTXOs pay the miner fee and fund the
+  // FIXED receive output. Offering only the token UTXO fails with "Not enough
+  // change remained to pay the transaction fee" -- the token UTXO carries 651
+  // sats of its own dust and the trade needs a few hundred more.
+  //
+  // This is the same lesson as the sell-asset/coin split above, one level down:
+  // the two sets are not alternatives, they are both inputs.
+  const spendSet = isBchSell ? coins : [...sellAssetsUsable, ...coins];
   const chosen = [];
   let total = 0n;
+  let tokenTotal = 0n;
   for (const f of [...spendSet].sort((a, b) => (BigInt(a.value) > BigInt(b.value) ? -1 : 1))) {
     chosen.push(f);
+    if (f.token) { tokenTotal += BigInt(f.token.amount); continue; }
     total += BigInt(f.value);
-    if (total >= amountBase * 2n + 20000n) break;
+    // Enough coin to cover the fee plus the dust a token receive output needs.
+    if (tokenTotal >= amountBase && total >= 20000n) break;
   }
-  if (total < amountBase) {
+  if (isBchSell && total < amountBase) {
     throw new Error(`cannot cover ${amountBase} from ${total} sats of ${sellTok.symbol}`);
+  }
+  if (!isBchSell && tokenTotal < amountBase) {
+    throw new Error(`cannot cover ${amountBase} from ${tokenTotal} ${sellTok.symbol}`);
   }
 
   // DERIVE the change address, never reserve it. newChangeAddress() persists the
@@ -356,6 +366,12 @@ async function runAttempt(attempt = 1) {
   // broadcast is confirmed accepted.
   const changeReservation = newChangeAddress(false);
   const changeLocking = addressToLockingBytecode(changeReservation.address);
+  // The RECEIVE output is a separate, FIXED payout so the SDK has an explicit
+  // instruction to pay the quoted amount. Without it the demand is folded into
+  // change, which is invisible for a token buy and catastrophic for a
+  // buy-for-BCH where the demand and our coin are the same asset. See
+  // lib/exlab-swap.mjs buildSwap.
+  const receiveLocking = addressToLockingBytecode(addrs[0].address);
 
   // ---- build ----------------------------------------------------------------
   // coin.key is the CHILD PRIVATE KEY for the address holding that UTXO. Not the
@@ -374,7 +390,11 @@ async function runAttempt(attempt = 1) {
   }));
 
   console.error('[3/4] building the swap...');
-  const built = buildSwap({ trade, inputCoins, changeLockingBytecode: changeLocking });
+  const built = buildSwap({
+    trade, inputCoins,
+    changeLockingBytecode: changeLocking,
+    receiveLockingBytecode: receiveLocking,
+  });
   console.error(
     `      built ${built.unsignedTxHex.length / 2} bytes, ` +
     `${built.payoutsInfo.length} payout(s), fee ${built.feeSats} sats (already signed)`
@@ -395,14 +415,23 @@ async function runAttempt(attempt = 1) {
     `against a quote of ${displayAmount(v.quoteDemand, outDecimals)}`
   );
 
-  // No foreign output is acceptable in a locally built swap. payoutsInfo holds
-  // only what the user receives plus change -- the pool covenant outputs are not
-  // in it, they are the pool's own locked positions.
-  const changeHex = Buffer.from(changeLocking).toString('hex');
+  // Every payout must be OURS. payoutsInfo holds two kinds: the FIXED receive
+  // and the CHANGE -- and now BOTH of them legitimately pay a different address
+  // than the change we derived, because the receive goes to the wallet's first
+  // receiving address. Checking only against the change bytecode flagged our own
+  // receive output as "foreign, 97984 sats" and refused a correct trade.
+  //
+  // The two addresses are compared as a SET, not as one value. Pool covenant
+  // outputs are not in payoutsInfo at all -- they are the pool's own locked
+  // positions, not something we receive.
+  const ours = new Set([
+    Buffer.from(changeLocking).toString('hex'),
+    Buffer.from(receiveLocking).toString('hex'),
+  ]);
   const foreign = (built.payoutsInfo ?? []).filter((p) => {
     const bc = p.output?.locking_bytecode;
     if (!bc) return false;
-    return Buffer.from(bc).toString('hex') !== changeHex;
+    return !ours.has(Buffer.from(bc).toString('hex'));
   });
   const foreignSats = foreign.reduce((a, p) => a + BigInt(p.output?.amount ?? 0n), 0n);
   if (foreignSats > FOREIGN_OUTPUT_CEILING) {

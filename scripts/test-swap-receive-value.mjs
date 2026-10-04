@@ -64,12 +64,44 @@ function fakeTrade(demand) {
   };
 }
 
-/** payouts_info shaped exactly as createTradeTx returns it. */
+/** payouts_info shaped exactly as createTradeTx returns it, buying a token. */
 function fakeBuilt(paid) {
   return {
     payoutsInfo: [
       { index: 2, output: { amount: 0n, token: { amount: paid, token_id: CATEGORY } } },
       { index: 3, output: { amount: 900000n, token: null } },
+    ],
+  };
+}
+
+/**
+ * The BUY-FOR-BCH shape, which is not a variation but a different shape.
+ *
+ * A token sell that pays out BCH has demand_token_id 'BCH' and the payout's
+ * token is NULL, with the amount in satoshis. This case is here because the
+ * guard shipped without it and then refused a real, correct swap with "built
+ * transaction has no BCH payout to compare against the quote" -- a guard that is
+ * right for the wrong reason and blocks the trade it exists to protect.
+ */
+function fakeBchTrade(demand) {
+  return {
+    entries: [{
+      supply_token_id: CATEGORY,
+      demand_token_id: 'BCH',
+      supply: 31n,
+      demand,
+      trade_fee: 293n,
+      pool: { outpoint: { index: 41, txhash: new Uint8Array(32) } },
+    }],
+    summary: { supply: 31n, demand, trade_fee: 293n },
+  };
+}
+
+function fakeBchBuilt(sats) {
+  return {
+    payoutsInfo: [
+      { index: 2, output: { amount: BigInt(sats), token: null } },
+      { index: 3, output: { amount: 0n, token: null } },
     ],
   };
 }
@@ -124,6 +156,27 @@ await test('a user-set minimum above the built amount is refused', async () => {
 await test('a user-set minimum the build meets passes', async () => {
   const r = verifyAgainstQuote({ trade: fakeTrade(QUOTED), built: fakeBuilt(QUOTED), minOutputBaseUnits: QUOTED });
   assert(r.ok, `expected pass, got: ${r.problems.join('; ')}`);
+});
+
+await test('a buy-for-BCH build paying the quoted sats passes', async () => {
+  const r = verifyAgainstQuote({ trade: fakeBchTrade(97844n), built: fakeBchBuilt(97928n) });
+  assert(r.ok, `expected pass, got: ${r.problems.join('; ')}`);
+  assert(r.paidOut === 97928n, `paidOut should be the sat amount, got ${r.paidOut}`);
+});
+
+await test('a buy-for-BCH build paying SHORT is refused', async () => {
+  const r = verifyAgainstQuote({ trade: fakeBchTrade(97844n), built: fakeBchBuilt(1n) });
+  assert(!r.ok, 'a short BCH payment must be refused');
+  assert(
+    r.problems.some((p) => p.includes('97844')),
+    `the refusal must name the quoted amount, got: ${r.problems.join('; ')}`,
+  );
+});
+
+await test('a buy-for-BCH build with no payout at all is refused', async () => {
+  const built = { payoutsInfo: [{ index: 3, output: { amount: 0n, token: null } }] };
+  const r = verifyAgainstQuote({ trade: fakeBchTrade(97844n), built });
+  assert(!r.ok, 'a missing BCH payout must be refused');
 });
 
 console.log(`RESULT: ${passed} passed, ${failed} failed`);
